@@ -1,6 +1,6 @@
-#include <iostream>  
-#include <pcl/io/pcd_io.h>  
-#include <pcl/point_types.h>  
+#include <iostream>
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
 #include <pcl/visualization/cloud_viewer.h>  
 
 // 函数用于读取二进制文件并转换为PCL格式  
@@ -20,7 +20,7 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr loadPointCloudFromBin(const std::string& fil
     }  
     cloud->width = cloud->size();  
     cloud->height = 1; // 表示单个点云  
-    cloud->is_dense = true;  
+    cloud->is_dense = false;
 
     file.close();  
     return cloud;  
@@ -28,12 +28,12 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr loadPointCloudFromBin(const std::string& fil
 
 int main(int argc, char** argv) {  
     // 确保传入二进制文件的正确路径  
-    if (argc != 2) {  
+    if (argc != 3) {
         std::cerr << "Usage: " << argv[0] << " <path_to_bin_file>" << std::endl;  
         return -1;  
     }  
 
-    std::string bin_file_path = argv[1];  
+    std::string bin_file_path = argv[2];
 
     // 读取点云数据  
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud = loadPointCloudFromBin(bin_file_path);  

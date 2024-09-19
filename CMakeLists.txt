@@ -23,6 +23,9 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(OpenCV REQUIRED)
 message(STATUS "opencv version ${OpenCV_VERSION}")
 
+# PCL
+find_package(PCL REQUIRED)
+
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -126,9 +129,15 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-include_directories( 
-  include ${catkin_INCLUDE_DIRS}
-  include ${OpenCV_INCLUDE_DIRS}
+include_directories(
+    /usr/include/vtk-7.1
+    )
+include_directories(
+  include
+  ${catkin_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
+
 ) 
 
 ## Declare a C++ library
@@ -146,6 +155,13 @@ include_directories(
 ## The recommended prefix ensures that target names across packages don't collide
 add_executable(Img2Bag 
 src/img2bag.cpp
+src/lidar2ros.cpp
+src/utils.hpp
+src/utils.cpp
+        src/lidar.cpp
+        src/lidar.h
+        #src/pcl_vis.cpp
+#src/sort_date.cpp
 #src/readfile.cpp
 )
 
@@ -164,6 +180,7 @@ target_link_libraries(Img2Bag
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   stdc++fs
+  ${PCL_COMMON_LIBRARIES} ${PCL_IO_LIBRARIES} ${PCL_LIBRARIES}
 )
 #############
 ## Install ##

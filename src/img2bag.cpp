@@ -22,6 +22,7 @@
 #include <std_msgs/Time.h>
 #include <std_msgs/Header.h>
 #include <sensor_msgs/image_encodings.h>
+#include <sensor_msgs/PointField.h>
 
 
 using namespace std;
@@ -69,7 +70,12 @@ void readBinFile(const string &bin_file, pcl::PointCloud<pcl::PointXYZ>::Ptr &cl
 
 int main(int argc, char* argv[]) {  
     ros::init(argc, argv, "Img2Ros");
-    const string rootPath = "/home/cx/dataset/nuscenes/v1.0-mini/samples";  
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <root>" << std::endl;
+        return -1;
+    }
+    const string rootPath = argv[1];
+    std::cout << "rootPath:" << rootPath << std::endl;
 
     ros::NodeHandle n;
     if (n.ok())
