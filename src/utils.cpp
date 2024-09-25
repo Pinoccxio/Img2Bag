@@ -7,6 +7,12 @@
 
 namespace nuscenes2bag {
 
+UnableToParseFileException(const std::string& fileName) {
+            msg += "Unable to parse ";
+            msg += fileName;
+        };
+
+
     std::string
     toLower(const std::string& str)
     {

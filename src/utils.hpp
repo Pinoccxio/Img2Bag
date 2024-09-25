@@ -60,10 +60,7 @@ namespace nuscenes2bag {
         std::string msg;
 
     public:
-        UnableToParseFileException(const std::string& fileName) {
-            msg += "Unable to parse ";
-            msg += fileName;
-        };
+        explicit UnableToParseFileException(const std::string& fileName);
         ~UnableToParseFileException() throw() {};
         const char *what() const throw() { return this->msg.c_str(); };
     };

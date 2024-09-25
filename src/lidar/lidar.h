@@ -34,11 +34,13 @@
 
 using namespace sensor_msgs;
 using namespace std;
+namespace fs = experimental::filesystem;
 
 
-class lidar {
-    void push_back_float32(std::vector<uint8_t>& data, float float_data);
+namespace lidar {
+    inline void push_back_float32(std::vector<uint8_t>& data, float float_data);
     boost::optional<PointCloud2> readLidarFile(const fs::path& filePath);
+    inline void fillFieldsForPointcloud(std::vector<PointField>& fields);
 };
 
 

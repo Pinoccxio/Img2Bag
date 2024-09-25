@@ -155,11 +155,12 @@ include_directories(
 ## The recommended prefix ensures that target names across packages don't collide
 add_executable(Img2Bag 
 src/img2bag.cpp
-src/lidar2ros.cpp
-src/utils.hpp
-src/utils.cpp
-        src/lidar.cpp
-        src/lidar.h
+src/main.cpp
+        #src/lidar2ros.cpp
+#src/utils.hpp
+#src/utils.cpp
+#        src/lidar/lidar.cpp
+#        src/lidar/lidar.h
         #src/pcl_vis.cpp
 #src/sort_date.cpp
 #src/readfile.cpp

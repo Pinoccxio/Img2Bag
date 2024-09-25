@@ -1,5 +1,8 @@
+//
+// Created by cx on 24-9-25.
+//
 #include <iostream>
-#include <string>  
+#include <string>
 #include <experimental/filesystem>
 #include <algorithm>
 
@@ -28,6 +31,7 @@
 using namespace std;
 namespace fs = experimental::filesystem;
 using namespace sensor_msgs;
+typedef uint64_t TimeStamp;
 
 auto topic_convertion(string topicName) {
     // Turn into Lowercase
@@ -71,32 +75,6 @@ inline void fillFieldsForPointcloud(std::vector<PointField>& fields)
     field.count = 1;
     field.name = std::string("intensity");
     fields.push_back(field);
-}
-
-void readBinFile(const string &bin_file, pcl::PointCloud<pcl::PointXYZI>::Ptr &cloud) {
-    ifstream file(bin_file, ios::binary);
-
-    if (!file) {
-        ROS_ERROR("Could not open BIN file.");
-        return;
-    }
-
-    // 假设每个点包含 x, y, z 三个浮点数
-    vector<float> data((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
-
-    size_t num_points = data.size() / 4;
-
-    cloud->width = num_points;
-    cloud->height = 1; // 1 for unorganized
-    cloud->points.resize(num_points);
-
-    for (size_t i = 0; i < num_points; ++i) {
-        cloud->points[i].x = data[i * 4];
-        cloud->points[i].y = data[i * 4 + 1];
-        cloud->points[i].z = data[i * 4 + 2];
-        cloud->points[i].intensity = data[i * 4 + 3];
-
-    }
 }
 
 union
@@ -169,7 +147,20 @@ boost::optional<PointCloud2>readLidarFile(const fs::path& filePath)
     return boost::optional<PointCloud2>(cloud);
 }
 
-int main(int argc, char* argv[]) {  
+template<typename T>
+void writeMsg(const std::string topicName, const std::string& frameID, const TimeStamp timeStamp, rosbag::Bag& outBag, boost::optional<T> msgOpt)
+{
+    if (msgOpt)
+    {
+        auto& msg = msgOpt.value();
+        msg.header.frame_id = frameID;
+        ros::Time t;
+        msg.header.stamp = t.fromNSec(timeStamp * 1000);
+        outBag.write(std::string(topicName).c_str(), msg.header.stamp, msg);
+    }
+}
+
+int main(int argc, char* argv[]) {
     ros::init(argc, argv, "Img2Ros");
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <root>" << std::endl;
@@ -183,11 +174,11 @@ int main(int argc, char* argv[]) {
     {
         ros::start();
 
-        if (!fs::is_directory(rootPath)) {  
-            cerr << "给定的路径不是一个有效的文件夹: " << rootPath << endl;  
-            return -1;  
-        }  
-        
+        if (!fs::is_directory(rootPath)) {
+            cerr << "给定的路径不是一个有效的文件夹: " << rootPath << endl;
+            return -1;
+        }
+
         rosbag::Bag bag_out("/home/cx/dataset/bag/test_i.bag", rosbag::bagmode::Write);
         ros::Time t = ros::Time::now();
 //        ros::Time t_0 = ros::Time::now();
@@ -197,7 +188,7 @@ int main(int argc, char* argv[]) {
 
 
         // Traverse every folder in ROOT
-        for (const auto& folder : fs::directory_iterator(rootPath)) {  
+        for (const auto& folder : fs::directory_iterator(rootPath)) {
             if (!fs::is_directory(folder)) {
                 cout << folder << "not a dir" << endl;
             }
@@ -219,19 +210,13 @@ int main(int argc, char* argv[]) {
                 cout << "Reading " << folder << endl;
                 cout << "Topic is " << topic << endl;
                 ros::Time t_0 = t;
+
                 if (topic == "lidar_top") {
                     for (const auto &file : files) {
+                        TimeStamp timeStamp = t_0.fromNSec(t_0);
                         pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
-                        PointCloud2 cloud2;
-                        readBinFile(file, cloud);   //函数
-
-                        // 转换为 ROS 消息
-                        sensor_msgs::PointCloud2 cloud_msg;
-                        pcl::toROSMsg(*cloud, cloud_msg);
-                        cloud_msg.header.stamp = t_0;
-                        cloud_msg.header.frame_id = "map"; // 根据需要设置框架ID
-
-                        bag_out.write(topic, ros::Time(t_0), cloud_msg);
+                        auto cloud_msg = readLidarFile(file);
+                        writeMsg(topic, "LIDAR", t_0, bag_out, cloud_msg);
                         t_0+=d;
                     }
                     cout << topic << " done" << endl;
@@ -250,10 +235,10 @@ int main(int argc, char* argv[]) {
                 }
                 cout << topic << " done" << endl;
             }
-        }  
+        }
         bag_out.close();
         ros::shutdown();
     }
 
-    return 0;  
+    return 0;
 }
