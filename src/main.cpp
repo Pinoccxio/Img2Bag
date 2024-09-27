@@ -1,6 +1,3 @@
-//
-// Created by cx on 24-9-25.
-//
 #include <iostream>
 #include <string>
 #include <experimental/filesystem>
@@ -10,8 +7,6 @@
 #include <rosbag/bag.h>
 
 #include <sensor_msgs/Image.h>
-// #include <opencv4/opencv2/core/core.hpp>
-// #include <opencv4/opencv2/highgui/highgui.hpp>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
