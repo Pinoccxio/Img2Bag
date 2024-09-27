@@ -154,7 +154,7 @@ include_directories(
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
 add_executable(Img2Bag 
-src/img2bag.cpp
+#src/img2bag.cpp
 src/main.cpp
         #src/lidar2ros.cpp
 #src/utils.hpp

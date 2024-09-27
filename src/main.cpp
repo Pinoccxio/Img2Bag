@@ -148,14 +148,13 @@ boost::optional<PointCloud2>readLidarFile(const fs::path& filePath)
 }
 
 template<typename T>
-void writeMsg(const std::string topicName, const std::string& frameID, const TimeStamp timeStamp, rosbag::Bag& outBag, boost::optional<T> msgOpt)
+void writeMsg(const std::string topicName, const std::string& frameID, const ros::Time timeStamp, rosbag::Bag& outBag, boost::optional<T> msgOpt)
 {
     if (msgOpt)
     {
         auto& msg = msgOpt.value();
         msg.header.frame_id = frameID;
-        ros::Time t;
-        msg.header.stamp = t.fromNSec(timeStamp * 1000);
+        msg.header.stamp = timeStamp;
         outBag.write(std::string(topicName).c_str(), msg.header.stamp, msg);
     }
 }
@@ -213,7 +212,6 @@ int main(int argc, char* argv[]) {
 
                 if (topic == "lidar_top") {
                     for (const auto &file : files) {
-                        TimeStamp timeStamp = t_0.fromNSec(t_0);
                         pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
                         auto cloud_msg = readLidarFile(file);
                         writeMsg(topic, "LIDAR", t_0, bag_out, cloud_msg);
