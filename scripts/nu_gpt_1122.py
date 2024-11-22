@@ -245,8 +245,6 @@ def process_rosbag(bag_file, output_dir):
             'filename': pc_filename,
             'prev': '',  # 之后更新
             'next': '',  # 之后更新
-            'sensor_modality': 'lidar',
-            'channel': 'LIDAR_TOP',
         }
         sample_datas.append(sd_lidar)
 
@@ -265,8 +263,6 @@ def process_rosbag(bag_file, output_dir):
             'filename': img_filename,
             'prev': '',  # 之后更新
             'next': '',  # 之后更新
-            'sensor_modality': 'camera',
-            'channel': 'CAM_FRONT',
         }
         sample_datas.append(sd_camera)
 
@@ -274,14 +270,9 @@ def process_rosbag(bag_file, output_dir):
         sample = {
             'token': sample_token,
             'timestamp': int(pc_timestamp * 1e6),
-            'scene_token': scene_token,
-            'data': {
-                'LIDAR_TOP': sd_token_lidar,
-                'CAM_FRONT': sd_token_camera,
-            },
             'prev': previous_sample_token,
             'next': '',  # 之后更新
-            'anns': [],  # 如果有标注信息，需要填写
+            'scene_token': scene_token,
         }
         samples.append(sample)
 
@@ -324,7 +315,7 @@ def process_rosbag(bag_file, output_dir):
 
     for key, value in metadata.items():
         with open(os.path.join(output_dir, f'{key}.json'), 'w') as f:
-            json.dump(value, f)
+            json.dump(value, f, indent=4)
 
     bag.close()
 
