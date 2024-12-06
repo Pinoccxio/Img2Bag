@@ -1,0 +1,8 @@
+prefix=/usr/local
+
+Name: Img2Bag
+Description: Description of Img2Bag
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: roscpp rospy std_msgs sensor_msgs rosbag cv_bridge image_transport

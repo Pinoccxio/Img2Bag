@@ -37,7 +37,7 @@ auto topic_convertion(string topicName) {
         }
     }
     string topic;
-    if (topicName == "cam_front"  or topicName == "cam_front_left" or topicName == "cam_front_right" or topicName == "cam_back" or topicName == "cam_back_left" or topicName == "cam_back_right")
+    if (topicName == "cam_front") // or topicName == "cam_front_left" or topicName == "cam_front_right" or topicName == "cam_back" or topicName == "cam_back_left" or topicName == "cam_back_right")
     {topic = topicName + "/raw";}
     else if (topicName == "lidar_top")
     {topic = topicName;}
@@ -156,24 +156,26 @@ void writeMsg(const std::string topicName, const std::string& frameID, const ros
 
 int main(int argc, char* argv[]) {
     ros::init(argc, argv, "Img2Ros");
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <root>" << std::endl;
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <root>" << " <destination>" << std::endl;
         return -1;
     }
-    const string rootPath = argv[1];
-    std::cout << "rootPath:" << rootPath << std::endl;
+    const string srcFolder = argv[1];
+    const string dstFile = argv[2];
+    std::cout << "Opening folder: " << srcFolder << std::endl;
+    std::cout << "Outputs will be saved into " << dstFile << std::endl;
 
     ros::NodeHandle n;
     if (n.ok())
     {
         ros::start();
 
-        if (!fs::is_directory(rootPath)) {
-            cerr << "给定的路径不是一个有效的文件夹: " << rootPath << endl;
+        if (!fs::is_directory(srcFolder)) {
+            cerr << "给定的路径不是一个有效的文件夹: " << srcFolder << endl;
             return -1;
         }
 
-        rosbag::Bag bag_out("/home/cx/dataset/bag/test_i.bag", rosbag::bagmode::Write);
+        rosbag::Bag bag_out(dstFile, rosbag::bagmode::Write);
         ros::Time t = ros::Time::now();
 //        ros::Time t_0 = ros::Time::now();
         double freq = 10;
@@ -182,7 +184,7 @@ int main(int argc, char* argv[]) {
 
 
         // Traverse every folder in ROOT
-        for (const auto& folder : fs::directory_iterator(rootPath)) {
+        for (const auto& folder : fs::directory_iterator(srcFolder)) {
             if (!fs::is_directory(folder)) {
                 cout << folder << "not a dir" << endl;
             }

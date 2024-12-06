@@ -47,16 +47,27 @@ void organizeFiles(const fs::path& sourceFolder, const fs::path& destinationFold
 int main(int argc, char** argv) {
 
     if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << argv[1] << " <topic>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <rootFolder>" << " <dstFolder>" << std::endl;
         return -1;
     }
-    std::string topic = argv[2];
-    fs::path srcFolder = "/home/cx/dataset/nuscenes/v1.0-mini/samples";
-    fs::path sourceFolder = srcFolder / topic; // 替换为实际路径
-    std::cout << "folder:" << sourceFolder << std::endl;
-    fs::path destinationFolder = "/home/cx/dataset/xin_nu"; // 替换为实际路径
+    fs::path srcFolder = argv[1];
+    fs::path destinationFolder = argv[2];
 
-    organizeFiles(sourceFolder, destinationFolder, topic);
+    std::vector<std::string> topicList;
+    topicList.push_back("CAM_BACK");
+    topicList.push_back("CAM_BACK_LEFT");
+    topicList.push_back("CAM_BACK_RIGHT");
+    topicList.push_back("CAM_FRONT");
+    topicList.push_back("CAM_FRONT_LEFT");
+    topicList.push_back("CAM_FRONT_RIGHT");
+    topicList.push_back("LIDAR_TOP");
+
+    for (const auto topic : topicList){
+        fs::path sourceFolder = srcFolder / topic;
+        std::cout << "Opening folder:" << sourceFolder << std::endl;
+
+        organizeFiles(sourceFolder, destinationFolder, topic);
+    }
 
     return 0;
 }

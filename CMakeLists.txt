@@ -133,7 +133,6 @@ include_directories(
     /usr/include/vtk-7.1
     )
 include_directories(
-  include
   ${catkin_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
@@ -155,9 +154,10 @@ include_directories(
 ## The recommended prefix ensures that target names across packages don't collide
 add_executable(Img2Bag
 src/main.cpp
-#src/utils.cpp
-#src/pcl_vis.cpp
 #src/sort_date.cpp
+)
+add_executable(Date
+src/sort_date.cpp
 )
 
 ## Rename C++ executable without prefix
@@ -176,6 +176,10 @@ target_link_libraries(Img2Bag
   ${OpenCV_LIBRARIES}
   stdc++fs
   ${PCL_COMMON_LIBRARIES} ${PCL_IO_LIBRARIES} ${PCL_LIBRARIES}
+)
+target_link_libraries(Date
+  ${catkin_LIBRARIES}
+  stdc++fs
 )
 #############
 ## Install ##
