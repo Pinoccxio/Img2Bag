@@ -3,6 +3,7 @@ import json
 import numpy as np
 import rosbag, rospy
 import cv2
+import pcl
 import sensor_msgs.point_cloud2 as pc2
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation as R
@@ -20,23 +21,40 @@ def parse_args():
 
 def save_point_cloud_to_pcd(point_cloud_msg, pcd_file):
     points = []
-    for point in pc2.read_points(point_cloud_msg, skip_nans=True):
+    intensities = []
+    ring_indices = []
+    
+    # 读取 PointCloud2 消息中的数据（X, Y, Z, Intensity, RingIndex）
+    for point in pc2.read_points(point_cloud_msg, field_names=("x", "y", "z", "intensity", "ring_index"), skip_nans=True):
         points.append([point[0], point[1], point[2]])
+        intensities.append(point[3])  # Intensity
+        ring_indices.append(point[4])  # RingIndex
+    
     points = np.array(points)
+    intensities = np.array(intensities)
+    ring_indices = np.array(ring_indices)
+    
+    # 拼接 X, Y, Z, Intensity, RingIndex
+    all_points = np.column_stack((points, intensities, ring_indices))
+
     # 保存为 PCD 文件
     with open(pcd_file, 'w') as f:
         f.write('# .PCD v0.7 - Point Cloud Data file format\n')
         f.write('VERSION 0.7\n')
-        f.write('FIELDS x y z\n')
-        f.write('SIZE 4 4 4\n')
-        f.write('TYPE F F F\n')
-        f.write('COUNT 1 1 1\n')
-        f.write('WIDTH {}\n'.format(len(points)))
+        f.write('FIELDS x y z intensity ring_index\n')
+        f.write('SIZE 4 4 4 4 4\n')
+        f.write('TYPE F F F F F\n')
+        f.write('COUNT 1 1 1 1 1\n')
+        f.write('WIDTH {}\n'.format(len(all_points)))
         f.write('HEIGHT 1\n')
         f.write('VIEWPOINT 0 0 0 1 0 0 0\n')
-        f.write('POINTS {}\n'.format(len(points)))
+        f.write('POINTS {}\n'.format(len(all_points)))
         f.write('DATA ascii\n')
-        np.savetxt(f, points, fmt='%f %f %f')
+        
+        # 保存数据到 PCD 文件
+        np.savetxt(f, all_points, fmt='%f %f %f %f %f')
+
+    print("PCD file saved successfully!")
 
 
 def save_image_to_jpg(image_msg, image_file, bridge):
@@ -54,7 +72,8 @@ def fill_obs_list(obstacle_world_coords_dict, json_file):
             cat = anno['category']
             label = anno['label']
             size = np.array([anno['w'], anno['l'], anno['h']])
-            obstacle_world_coords_dict.append({"pos": pos, "cat": cat, "size": size, "label": label})
+            anno_id = anno['id']
+            obstacle_world_coords_dict.append({"pos": pos, "category": cat, "size": size, "label": label, "id": anno_id})
     print("Annotation.json Closed")
 
 
@@ -78,21 +97,40 @@ def is_in_view(pos_obs, K_cam, H, W):
     return False
 
 
-def calculate_visibility(obs_bbox, H, W):
-    """
-    计算标注框的可见度
-    obs_bbox: 标注框的坐标（左上角和右下角）
-    H: 图像的高度
-    W: 图像的宽度
-    返回：可见度百分比
-    """
-    x_min, y_min, x_max, y_max = obs_bbox
+def transform_to_camera_coordinates(world_coords, T_World2Cam):
+    # 使用转换矩阵将世界坐标转换到相机坐标系
+    world_coords_homogeneous = np.array(world_coords).reshape(4, 1)
+    camera_coords_homogeneous = np.dot(T_World2Cam, world_coords_homogeneous)
+    
+    # 获取相机坐标
+    x_cam, y_cam, z_cam = camera_coords_homogeneous[:3].flatten()
+    
+    return x_cam, y_cam, z_cam
+
+
+def calculate_visibility(obs_bbox, K_cam, H, W, T_World2Cam):
+    x_min, y_min, z_min, x_max, y_max, z_max = obs_bbox
+    
+    # 转换标注框的世界坐标为相机坐标系下的坐标
+    world_coords_min = [x_min, y_min, z_min, 1.0]  # 将 (x_min, y_min, z_min) 放到世界坐标中
+    world_coords_max = [x_max, y_max, z_max, 1.0]  # 同理
+    
+    # 获取相机坐标系下的坐标
+    x_min_cam, y_min_cam, z_min_cam = transform_to_camera_coordinates(world_coords_min, T_World2Cam)
+    x_max_cam, y_max_cam, z_max_cam = transform_to_camera_coordinates(world_coords_max, T_World2Cam)
+    
+    # 根据相机坐标计算像素坐标
+    u_min = K_cam[0, 0] * x_min_cam / z_min_cam + K_cam[0, 2]
+    v_min = K_cam[1, 1] * y_min_cam / z_min_cam + K_cam[1, 2]
+    
+    u_max = K_cam[0, 0] * x_max_cam / z_max_cam + K_cam[0, 2]
+    v_max = K_cam[1, 1] * y_max_cam / z_max_cam + K_cam[1, 2]
     
     # 计算标注框在图像内的可见区域
-    visible_x_min = max(0, x_min)
-    visible_y_min = max(0, y_min)
-    visible_x_max = min(W, x_max)
-    visible_y_max = min(H, y_max)
+    visible_x_min = max(0, u_min)
+    visible_y_min = max(0, v_min)
+    visible_x_max = min(W, u_max)
+    visible_y_max = min(H, v_max)
 
     # 如果标注框完全在图像外，则可见度为0
     if visible_x_min >= visible_x_max or visible_y_min >= visible_y_max:
@@ -100,7 +138,7 @@ def calculate_visibility(obs_bbox, H, W):
 
     # 计算标注框可见部分的面积与原标注框面积的比例
     visible_area = (visible_x_max - visible_x_min) * (visible_y_max - visible_y_min)
-    total_area = (x_max - x_min) * (y_max - y_min)
+    total_area = (u_max - u_min) * (v_max - v_min)
 
     visibility = visible_area / total_area
     # 根据可见度，返回百分比
@@ -115,10 +153,11 @@ def calculate_visibility(obs_bbox, H, W):
 
 
 def process_rosbag(bag_file, output_dir):
-    bridge = CvBridge()
+    bridge = CvBridge() 
     bag = rosbag.Bag(bag_file, 'r')
     bag_name = os.path.basename(bag_file)
-    scene_name = os.path.splitext(bag_name)[0]
+    scene_time = os.path.splitext(bag_name)[0]
+    scene_name = str(scene_time).split('-')[1] + str(scene_time).split('-')[2] + '-' + str(scene_time).split('-')[3] + str(scene_time).split('-')[4]
 
     os.makedirs(os.path.join(output_dir, 'sweeps/LIDAR_TOP'), exist_ok=True)
     os.makedirs(os.path.join(output_dir, 'sweeps/CAM_FRONT'), exist_ok=True)
@@ -136,7 +175,7 @@ def process_rosbag(bag_file, output_dir):
     logs = []
 
     obstacle_world_coords_dict = []
-    anno_file = '/home/cx/dataset/annotations.json'
+    anno_file = '/home/cx/dataset/isaac_sim/annotations_normal.json'
     fill_obs_list(obstacle_world_coords_dict, anno_file)
 
 # ===================================== Transform Matrix =====================================
@@ -255,12 +294,13 @@ def process_rosbag(bag_file, output_dir):
     odom_timestamps = list(odom_timestamps)
     rgb_timestamps = list(rgb_timestamps)
     sample_idx = 0
+    obs_count = 0
     print("Processing /pc_scan messages...")
     for idx, (topic, pc_msg, t) in enumerate(tqdm(bag.read_messages(topics=['/pc_scan']))):
     
         pc_timestamp = t.to_sec()
         is_key_frame = False
-        sample_token = f"sample_token_{sample_idx:06d}"
+        sample_token = f"sample_token_{scene_name}_{sample_idx:06d}"
         
         # 2Hz key frame
         if (idx % 5 == 0):
@@ -277,7 +317,7 @@ def process_rosbag(bag_file, output_dir):
 
 # ======================================== ego_pose ========================================
 
-        ego_pose_token = f"ego_pose_token_{idx:06d}"
+        ego_pose_token = f"ego_token_{scene_name}_{idx:06d}"
         odom_orientation = odom_msg.pose.pose.orientation
         odom_position = odom_msg.pose.pose.position
         ego_pose = {
@@ -309,7 +349,7 @@ def process_rosbag(bag_file, output_dir):
         # <<< Save pcd and jpg <<<
 
 # ====================================== sample_data ======================================
-        sd_token_lidar = f"sample_data_token_{(idx*2):06d}"
+        sd_token_lidar = f"sd_token_{scene_name}_{(idx*2):06d}"
         sd_lidar = {
             'token': sd_token_lidar,
             'sample_token': sample_token,
@@ -326,7 +366,7 @@ def process_rosbag(bag_file, output_dir):
         }
         sample_datas.append(sd_lidar)
 
-        sd_token_camera = f"sample_data_token_{(idx*2 + 1):06d}"
+        sd_token_camera = f"sd_token_{scene_name}_{(idx*2 + 1):06d}"
         sd_camera = {
             'token': sd_token_camera,
             'sample_token': sample_token,
@@ -346,7 +386,6 @@ def process_rosbag(bag_file, output_dir):
 
 # ======================================== sample ========================================
         if is_key_frame:
-            print(f"Saving key-frame data at {int(pc_timestamp * 1e6)}\n")
             os.makedirs(os.path.join(output_dir, 'samples/LIDAR_TOP'), exist_ok=True)
             pc_filename_sample = f"samples/LIDAR_TOP/pc_{int(pc_timestamp * 1e6)}.pcd"
             pc_filepath_sample = os.path.join(output_dir, pc_filename_sample)
@@ -356,6 +395,7 @@ def process_rosbag(bag_file, output_dir):
             img_filename_sample = f"samples/CAM_FRONT/img_{int(pc_timestamp * 1e6)}.jpg"
             img_filepath_sample = os.path.join(output_dir, img_filename_sample)
             save_image_to_jpg(rgb_msg, img_filepath_sample, bridge)
+            print(f"Saving key-frame data at {int(pc_timestamp * 1e6)}\n")
 
             # 创建sample条目
             sample = {
@@ -375,22 +415,25 @@ def process_rosbag(bag_file, output_dir):
             T_World2Body[:3, 3] = t_World2Body + translation
             T_World2Body[:3, :3] = rotation
             T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Body2Lidar, T_World2Body))
-            obs_count = 0
+            
             for obs in obstacle_world_coords_dict:
                     pos_obs = obs['pos']
-                    pos_obs = [pos_obs[0], pos_obs[1], pos_obs[2], 1]
-                    size_obs = obs['size'].tolist()
-                    pos_cam = np.dot(T_World2Cam, pos_obs)
+                    pos_obs_homo = [pos_obs[0], pos_obs[1], pos_obs[2], 1]
+                    pos_cam = np.dot(T_World2Cam, pos_obs_homo)
                     if (is_in_view(pos_cam, K, rgb_msg.height, rgb_msg.width)):
-                        sample_anno_token = f'sample_annotation_{obs_count:06d}'
+                        sample_anno_token = f'sa_token_{scene_name}_{obs_count:06d}'
                         prev_token = sample_annotations[obs_count - 1]['token'] if obs_count > 0 else ''  
                         next_token = ''  # 默认为空，后续将在列表末尾添加  
                         obs_count = obs_count + 1
+                        obs_id = obs["id"]
                         # >>> bbox_coords >>>
-                        x_min, y_min = pos_cam[0] - size_obs[0] / 2, pos_cam[1] - size_obs[1] / 2
-                        x_max, y_max = pos_cam[0] + size_obs[0] / 2, pos_cam[1] + size_obs[1] / 2
+                        size_obs = obs['size'].tolist()
+                        rot_obs = np.array([1,0,0,0]).tolist()
+                        x_min, y_min, z_min = pos_obs[0] - size_obs[0] / 2, pos_obs[1] - size_obs[1] / 2, pos_obs[2] - size_obs[2] / 2
+                        x_max, y_max, z_max = pos_obs[0] + size_obs[0] / 2, pos_obs[1] + size_obs[1] / 2, pos_obs[2] + size_obs[2] / 2
                         # <<< bbox_coords <<<
-                        visibility = calculate_visibility([x_min, y_min, x_max, y_max], rgb_msg.height, rgb_msg.width)
+                        visibility = calculate_visibility([x_min, y_min, z_min, x_max, y_max, z_max], K, rgb_msg.height, rgb_msg.width, T_World2Cam)
+                        print(f"visibility level: v-{visibility}")
                         label = obs['label']
                         num_lidar_pts = 0
                         for point in pc2.read_points(pc_msg, skip_nans=True):
@@ -399,17 +442,18 @@ def process_rosbag(bag_file, output_dir):
                             if is_in_view(pcd_cam, K, rgb_msg.height, rgb_msg.width):
                                 if x_min <= pcd_cam[0] <= x_max and y_min <= pcd_cam[1] <= y_max:
                                     num_lidar_pts = num_lidar_pts + 1
-                        print(f"{num_lidar_pts} lidar points in label-{label}")
+                        # print(f"{num_lidar_pts} lidar points in label-{label}\n")
                         sample_annotation = {
                             "token": sample_anno_token,  
                             "sample_token": sample_token,
+                            "instance_token": f"instance_token_{scene_name}_{obs_id:06d}",
                             "visibility_token": f"{visibility}",  
                             "attribute_tokens": [
-                                f"attribute_token_000{label}"
+                                f"attribute_token_00000{label}"
                             ],
-                            "translation": translation,  
+                            "translation": pos_obs.tolist(),  
                             "size": size_obs,  
-                            "rotation": quaternion,
+                            "rotation": rot_obs,
                             "prev": prev_token,  
                             "next": next_token,
                             "num_lidar_pts": num_lidar_pts,
