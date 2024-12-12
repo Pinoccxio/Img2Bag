@@ -382,7 +382,7 @@ def process_rosbag(bag_file, output_dir, tag):
             'is_key_frame': is_key_frame,
             'height': 0,
             'width': 0,
-            'filename': pc_filename,
+            'filename': f"sweeps/LIDAR_TOP/{sweep_bin_file}",
             'prev': '',
             'next': '',
         }
@@ -399,7 +399,7 @@ def process_rosbag(bag_file, output_dir, tag):
             'is_key_frame': is_key_frame,
             'height': rgb_msg.height,
             'width': rgb_msg.width,
-            'filename': img_filename,
+            'filename': f"sweeps/CAM_FRONT/{sweep_cam_file}",
             'prev': '',
             'next': '',
         }
