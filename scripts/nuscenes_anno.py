@@ -192,10 +192,14 @@ def process_rosbag(bag_file, output_dir, tag):
     if tag == 'open':
         t_World2Body = np.array([20, 20, 0.1])
         fill_obs_list(obstacle_world_coords_dict, anno_open_file)
+        calibrated_sensor_token_camera = "sensor_token_camera_open"
+        calibrated_sensor_token_lidar = "sensor_token_lidar_open"
     else:
 
         t_World2Body = np.array([20, 20, 6.2])
         fill_obs_list(obstacle_world_coords_dict, anno_normal_file)
+        calibrated_sensor_token_camera = "sensor_token_camera_normal"
+        calibrated_sensor_token_lidar = "sensor_token_lidar_normal"
     
 
 # ===================================== Transform Matrix =====================================
@@ -275,14 +279,14 @@ def process_rosbag(bag_file, output_dir, tag):
 
     # >>> calibrated_sensors,json >>>
     calibrated_sensor_camera = {
-        'token': sensor_token_camera,
+        'token': calibrated_sensor_token_camera,
         'sensor_token': sensor_token_camera,
         'translation': cam_translation.tolist(),  # 自行设置
         'rotation': [0, 0, 0, 1],  # 单位四元数
         'camera_intrinsic': [[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]],
     }
     calibrated_sensor_lidar = {
-        'token': sensor_token_lidar,
+        'token': calibrated_sensor_token_lidar,
         'sensor_token': sensor_token_lidar,
         'translation': lidar_translation.tolist(),
         'rotation': [0, 0, 0, 1],
@@ -367,7 +371,7 @@ def process_rosbag(bag_file, output_dir, tag):
 
         sweep_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
         sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
-        save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
+        # save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
         # <<< Save pcd and jpg <<<
 
 # ====================================== sample_data ======================================
@@ -413,8 +417,8 @@ def process_rosbag(bag_file, output_dir, tag):
             save_point_cloud_to_pcd(pc_msg, sample_bin_path)
 
             sample_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
-            sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
-            save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+            # sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
+            # save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
             print(f"Saving key-frame data at {int(pc_timestamp * 1e6)}\n")
 
             # 创建sample条目
