@@ -3,13 +3,15 @@ import json
 import numpy as np
 import rosbag, rospy
 import cv2
-import pcl
+import struct
 import sensor_msgs.point_cloud2 as pc2
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 from bisect import bisect_left
 
+
+# python nuscenes_anno.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-29-20-46-43.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0929_2046 --tag normal
 
 def parse_args():
     # 解析命令行参数
@@ -20,42 +22,44 @@ def parse_args():
     return parser.parse_args()
 
 
-def save_point_cloud_to_pcd(point_cloud_msg, pcd_file):
-    points = []
-    intensities = []
-    ring_indices = []
+def calculate_ring_index(point):
+    x, y, z = point
+    # 激光雷达的垂直视场范围：从 -15° 到 +15°，总共 30°
+    min_angle = -15  # 最小角度
+    max_angle = 15   # 最大角度
+    num_rings = 32    # 32个环
     
-    # 读取 PointCloud2 消息中的数据（X, Y, Z, Intensity, RingIndex）
-    for point in pc2.read_points(point_cloud_msg, field_names=("x", "y", "z", "intensity", "ring_index"), skip_nans=True):
-        points.append([point[0], point[1], point[2]])
-        intensities.append(point[3])  # Intensity
-        ring_indices.append(point[4])  # RingIndex
-    
-    points = np.array(points)
-    intensities = np.array(intensities)
-    ring_indices = np.array(ring_indices)
-    
-    # 拼接 X, Y, Z, Intensity, RingIndex
-    all_points = np.column_stack((points, intensities, ring_indices))
+    # 计算垂直角度：通过 arctan2(z, r) 来计算
+    # 假设 r 为点到激光雷达的水平距离，可以通过 sqrt(x^2 + y^2) 来获得
+    r = np.sqrt(x**2 + y**2)
+    angle = np.arctan2(z, r) * 180 / np.pi  # 将 z 值和 r 值转换为角度（单位：度）
 
-    # 保存为 PCD 文件
-    with open(pcd_file, 'w') as f:
-        f.write('# .PCD v0.7 - Point Cloud Data file format\n')
-        f.write('VERSION 0.7\n')
-        f.write('FIELDS x y z intensity ring_index\n')
-        f.write('SIZE 4 4 4 4 4\n')
-        f.write('TYPE F F F F F\n')
-        f.write('COUNT 1 1 1 1 1\n')
-        f.write('WIDTH {}\n'.format(len(all_points)))
-        f.write('HEIGHT 1\n')
-        f.write('VIEWPOINT 0 0 0 1 0 0 0\n')
-        f.write('POINTS {}\n'.format(len(all_points)))
-        f.write('DATA ascii\n')
-        
-        # 保存数据到 PCD 文件
-        np.savetxt(f, all_points, fmt='%f %f %f %f %f')
+    # 限制角度在 min_angle 和 max_angle 范围内
+    if angle < min_angle:
+        angle = min_angle
+    elif angle > max_angle:
+        angle = max_angle
+    
+    # 每个环之间的角度差
+    angle_step = (max_angle - min_angle) / (num_rings - 1)
 
-    print("PCD file saved successfully!")
+    # 计算该角度对应的环索引
+    ring_index = round((angle - min_angle) / angle_step)
+    
+    return ring_index
+
+
+def save_point_cloud_to_pcd(point_cloud_msg, bin_file):  
+    bin_data = b''
+    point_cloud_data = list(pc2.read_points(point_cloud_msg, field_names=("x", "y", "z"), skip_nans=True))
+    for point in point_cloud_data:
+            x, y, z = point
+            ring = float(calculate_ring_index(point))
+            intensity = 100.0
+            bin_data += struct.pack('fffff', x, y, z, intensity, ring)
+
+    with open(bin_file, 'wb') as f:
+        f.write(bin_data)
 
 
 def save_image_to_jpg(image_msg, image_file, bridge):
@@ -160,10 +164,17 @@ def process_rosbag(bag_file, output_dir, tag):
     scene_time = os.path.splitext(bag_name)[0]
     scene_name = str(scene_time).split('-')[1] + str(scene_time).split('-')[2] + '-' + str(scene_time).split('-')[3] + str(scene_time).split('-')[4]
 
-    os.makedirs(os.path.join(output_dir, 'sweeps/LIDAR_TOP'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'sweeps/CAM_FRONT'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'samples/LIDAR_TOP'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'samples/CAM_FRONT'), exist_ok=True)
+    sweep_lidar_folder = os.path.join(output_dir, 'sweeps/LIDAR_TOP') 
+    os.makedirs(sweep_lidar_folder, exist_ok=True)
+
+    sweep_camera_folder = os.path.join(output_dir, 'sweeps/CAM_FRONT') 
+    os.makedirs(sweep_camera_folder, exist_ok=True)
+
+    sample_lidar_folder = os.path.join(output_dir, 'samples/LIDAR_TOP') 
+    os.makedirs(sample_lidar_folder, exist_ok=True)
+    
+    sample_camera_folder = os.path.join(output_dir, 'samples/CAM_FRONT') 
+    os.makedirs(sample_camera_folder, exist_ok=True)
 
     scenes = []
     samples = []
@@ -179,12 +190,13 @@ def process_rosbag(bag_file, output_dir, tag):
     anno_normal_file = '/home/cx/dataset/isaac_sim/annotations_normal.json'
     anno_open_file = '/home/cx/dataset/isaac_sim/annotations_open.json'
     if tag == 'open':
-        anno_file = anno_open_file
         t_World2Body = np.array([20, 20, 0.1])
-    elif tag == 'normal':
-        anno_file == anno_normal_file
+        fill_obs_list(obstacle_world_coords_dict, anno_open_file)
+    else:
+
         t_World2Body = np.array([20, 20, 6.2])
-    fill_obs_list(obstacle_world_coords_dict, anno_file)
+        fill_obs_list(obstacle_world_coords_dict, anno_normal_file)
+    
 
 # ===================================== Transform Matrix =====================================
     # World2Body
@@ -265,14 +277,14 @@ def process_rosbag(bag_file, output_dir, tag):
     calibrated_sensor_camera = {
         'token': sensor_token_camera,
         'sensor_token': sensor_token_camera,
-        'translation': cam_translation,  # 自行设置
+        'translation': cam_translation.tolist(),  # 自行设置
         'rotation': [0, 0, 0, 1],  # 单位四元数
         'camera_intrinsic': [[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]],
     }
     calibrated_sensor_lidar = {
         'token': sensor_token_lidar,
         'sensor_token': sensor_token_lidar,
-        'translation': lidar_translation,
+        'translation': lidar_translation.tolist(),
         'rotation': [0, 0, 0, 1],
         'camera_intrinsic': []
     }
@@ -348,13 +360,14 @@ def process_rosbag(bag_file, output_dir, tag):
 # ======================================== ego_pose ========================================
 
         # >>> Save pcd and jpg >>>
-        pc_filename = f"sweeps/LIDAR_TOP/pc_{int(pc_timestamp * 1e6)}.pcd"
-        pc_filepath = os.path.join(output_dir, pc_filename)
-        save_point_cloud_to_pcd(pc_msg, pc_filepath)
-        
-        img_filename = f"sweeps/CAM_FRONT/img_{int(pc_timestamp * 1e6)}.jpg"
-        img_filepath = os.path.join(output_dir, img_filename)
-        save_image_to_jpg(rgb_msg, img_filepath, bridge)
+
+        sweep_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
+        sweep_bin_path = os.path.join(sweep_lidar_folder, sweep_bin_file)
+        save_point_cloud_to_pcd(pc_msg, sweep_bin_path)
+
+        sweep_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
+        sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
+        save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
         # <<< Save pcd and jpg <<<
 
 # ====================================== sample_data ======================================
@@ -395,15 +408,13 @@ def process_rosbag(bag_file, output_dir, tag):
 
 # ======================================== sample ========================================
         if is_key_frame:
-            os.makedirs(os.path.join(output_dir, 'samples/LIDAR_TOP'), exist_ok=True)
-            pc_filename_sample = f"samples/LIDAR_TOP/pc_{int(pc_timestamp * 1e6)}.pcd"
-            pc_filepath_sample = os.path.join(output_dir, pc_filename_sample)
-            save_point_cloud_to_pcd(pc_msg, pc_filepath_sample)
+            sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
+            sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
+            save_point_cloud_to_pcd(pc_msg, sample_bin_path)
 
-            os.makedirs(os.path.join(output_dir, 'samples/CAM_FRONT'), exist_ok=True)
-            img_filename_sample = f"samples/CAM_FRONT/img_{int(pc_timestamp * 1e6)}.jpg"
-            img_filepath_sample = os.path.join(output_dir, img_filename_sample)
-            save_image_to_jpg(rgb_msg, img_filepath_sample, bridge)
+            sample_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
+            sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
+            save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
             print(f"Saving key-frame data at {int(pc_timestamp * 1e6)}\n")
 
             # 创建sample条目
@@ -452,10 +463,11 @@ def process_rosbag(bag_file, output_dir, tag):
                                 if x_min <= pcd_cam[0] <= x_max and y_min <= pcd_cam[1] <= y_max:
                                     num_lidar_pts = num_lidar_pts + 1
                         # print(f"{num_lidar_pts} lidar points in label-{label}\n")
+                        instance_token = f"instance_token_{scene_name}_{obs_id:06d}"
                         sample_annotation = {
                             "token": sample_anno_token,  
                             "sample_token": sample_token,
-                            "instance_token": f"instance_token_{scene_name}_{obs_id:06d}",
+                            "instance_token": instance_token,
                             "visibility_token": f"{visibility}",  
                             "attribute_tokens": [
                                 f"attribute_token_00000{label}"
@@ -474,12 +486,48 @@ def process_rosbag(bag_file, output_dir, tag):
                 sample_annotations[i]['next'] = sample_annotations[i + 1]['token']  
 # ======================================== sample_annotation ========================================
 
+# ============================================= instance =============================================
+            instance_data = {}
+            sorted_sample_annotations = sorted(sample_annotations, key=lambda x: x['token'])
+            for sample_annotation in sorted_sample_annotations:
+                instance_token = sample_annotation['instance_token']
+                sample_annotation_token = sample_annotation['token']
+                cat_id = int(sample_annotation['attribute_tokens'][0].split('_')[-1])
+                category_token = f"category_token_{cat_id:06d}"
+
+                if instance_token not in instance_data:
+                    instance_data[instance_token] = {
+                        "token": instance_token,
+                        "category_token": category_token,  # 可根据实际需求设置类别标识符
+                        "nbr_annotations": 0,
+                        "first_annotation_token": sample_annotation_token,
+                        "last_annotation_token": sample_annotation_token
+                    }
+
+                # 更新 last_annotation_token
+                instance_data[instance_token]["last_annotation_token"] = sample_annotation_token
+                instance_data[instance_token]["nbr_annotations"] = instance_data[instance_token]["nbr_annotations"] + 1
+
+                instance_list = list(instance_data.values())
+# ============================================= instance =============================================
+
+# =============================== prev & next in sample/sample_data ===============================                
+    for i in range(len(samples) - 1):
+        samples[i]["prev"] = samples[i - 1]["token"] if i > 0 else ''
+        samples[i]["next"] = samples[i + 1]["token"]    
+    samples[len(samples) - 1]["prev"] = samples[len(samples) - 2]["token"]
+    for i in range(len(sample_datas) - 1):
+        sample_datas[i]["prev"] = sample_datas[i - 1]["token"] if i > 0 else ''
+        sample_datas[i]["next"] = sample_datas[i + 1]["token"]    
+    sample_datas[len(sample_datas) - 1]["prev"] = sample_datas[len(sample_datas) - 2]["token"]
+# =============================== prev & next in sample/sample_data ===============================
+
     # Update Scene 
     scenes[0]['first_sample_token'] = samples[0]['token']
     scenes[0]['last_sample_token'] = samples[-1]['token']
     scenes[0]['nbr_samples'] = len(samples)
 
-# ======================================== JSON ========================================
+# ============================================== JSON ==============================================
     metadata = {
         'scene': scenes,
         'sample': samples,
@@ -489,6 +537,7 @@ def process_rosbag(bag_file, output_dir, tag):
         'calibrated_sensor': calibrated_sensors,
         'sensor': sensors,
         'log': logs,
+        'instance': instance_list
     }
     print("Ready to write json files")
 
