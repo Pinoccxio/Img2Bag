@@ -11,7 +11,7 @@ from tqdm import tqdm
 from bisect import bisect_left
 
 
-# python nuscenes_anno.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-29-20-46-43.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0929_2046 --tag normal
+# python nuscenes_anno.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-30-09-10-54.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0930_0910 --tag normal
 
 def parse_args():
     # 解析命令行参数
@@ -182,6 +182,7 @@ def process_rosbag(bag_file, output_dir, tag):
     sample_annotations = []
     ego_poses = []
     calibrated_sensors = []
+    instance_list = []
     
     sensors = []
     logs = []
@@ -371,7 +372,7 @@ def process_rosbag(bag_file, output_dir, tag):
 
         sweep_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
         sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
-        # save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
+        save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
         # <<< Save pcd and jpg <<<
 
 # ====================================== sample_data ======================================
@@ -417,8 +418,8 @@ def process_rosbag(bag_file, output_dir, tag):
             save_point_cloud_to_pcd(pc_msg, sample_bin_path)
 
             sample_cam_file = f"img_{int(pc_timestamp * 1e6)}.jpg"
-            # sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
-            # save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+            sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
+            save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
             print(f"Saving key-frame data at {int(pc_timestamp * 1e6)}\n")
 
             # 创建sample条目
@@ -512,7 +513,7 @@ def process_rosbag(bag_file, output_dir, tag):
                 instance_data[instance_token]["last_annotation_token"] = sample_annotation_token
                 instance_data[instance_token]["nbr_annotations"] = instance_data[instance_token]["nbr_annotations"] + 1
 
-                instance_list = list(instance_data.values())
+            instance_list = list(instance_data.values())
 # ============================================= instance =============================================
 
 # =============================== prev & next in sample/sample_data ===============================                
@@ -545,8 +546,11 @@ def process_rosbag(bag_file, output_dir, tag):
     }
     print("Ready to write json files")
 
+    v_folder = 'v1.0-mini'
+    v_path = os.path.join(output_dir, v_folder)
+    os.makedirs(v_path, exist_ok=True)
     for key, value in metadata.items():
-        with open(os.path.join(output_dir, f'{key}.json'), 'w') as f:
+        with open(os.path.join(v_path, f'{key}.json'), 'w') as f:
             json.dump(value, f, indent=4)
         print(f"Saved into {key}.json")
 # ======================================== JSON ========================================

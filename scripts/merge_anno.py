@@ -36,8 +36,10 @@ def main():
                     sensor_folder_path = os.path.join(folder_path, sensor_folder)
                     for file in sorted(os.listdir(sensor_folder_path)):
                         src = os.path.join(sensor_folder_path, file)
-                        dst = os.path.join(output, folder, sensor_folder, file)
-                        shutil.copy2(src,dst)
+                        dst_folder = os.path.join(output, folder, sensor_folder)
+                        os.makedirs(dst_folder, exist_ok=True)
+                        dst = os.path.join(dst_folder, file)
+                        shutil.move(src,dst)
                         print(f'{scene}-{folder}: copying {src} to {dst}')
             if folder == 'v1.0-mini':
                 for json_file in sorted(os.listdir(folder_path)):
@@ -72,12 +74,12 @@ def main():
         'instance': instance_dict
     }
     print("Ready to write json files")
-
+    v_path = os.path.join(output, 'v1.0-mini')
+    os.makedirs(v_path, exist_ok=True)
     for key, value in metadata.items():
-        with open(os.path.join(output, 'v1.0-mini', f'{key}.json'), 'w') as f:
+        with open(os.path.join(v_path, f'{key}.json'), 'w') as f:
             json.dump(value, f, indent=4)
         print(f"Saved into {key}.json")
-
 
 
 if __name__ == "__main__":
