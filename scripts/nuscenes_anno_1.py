@@ -11,13 +11,14 @@ from tqdm import tqdm
 from bisect import bisect_left
 
 
-# python nuscenes_anno.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-30-09-10-54.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0930_0910 --tag normal
+# python nuscenes_anno_1.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-30-09-10-54.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0930_0910 --tag normal
+
 
 def parse_args():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='读取RosBag包消息')
     parser.add_argument('--tag', type=str, help='开放场景or建筑', default='open')
-    parser.add_argument('--bag', type=str, help='RosBag包路径', required=True)
+    parser.add_argument('--bag', type=str  , help='RosBag包路径', required=True)
     parser.add_argument('--output_dir', type=str, help='标注保存文件路径', required=True)
     return parser.parse_args()
 
@@ -92,6 +93,7 @@ def num_pts_add(point, pos_obs, size_obs):
     else:
         return False
 
+
 def is_in_view(pos_obs, K_cam, H, W):
     # Obstacle coords
     z = pos_obs[2]
@@ -112,29 +114,12 @@ def is_in_view(pos_obs, K_cam, H, W):
     return False
 
 
-def transform_to_camera_coordinates(world_coords, T_World2Cam):
-    # 使用转换矩阵将世界坐标转换到相机坐标系
-    world_coords_homogeneous = np.array(world_coords).reshape(4, 1)
-    camera_coords_homogeneous = np.dot(T_World2Cam, world_coords_homogeneous)
-    
-    # 获取相机坐标
-    x_cam, y_cam, z_cam = camera_coords_homogeneous[:3].flatten()
-    
-    return x_cam, y_cam, z_cam
-
-
 def calculate_visibility(obs_bbox, K_cam, H, W, T_World2Cam):
     x_min, y_min, z_min, x_max, y_max, z_max = obs_bbox
     
-    # 转换标注框的世界坐标为相机坐标系下的坐标
-    world_coords_min = [x_min, y_min, z_min, 1.0]  # 将 (x_min, y_min, z_min) 放到世界坐标中
-    world_coords_max = [x_max, y_max, z_max, 1.0]  # 同理
-    
     # 获取相机坐标系下的坐标
-    # x_min_cam, y_min_cam, z_min_cam = transform_to_camera_coordinates(world_coords_min, T_World2Cam)
-    # x_max_cam, y_max_cam, z_max_cam = transform_to_camera_coordinates(world_coords_max, T_World2Cam)
-    x_min_cam, y_min_cam, z_min_cam = np.dot(T_World2Cam, world_coords_min)[:3].flatten()
-    x_max_cam, y_max_cam, z_max_cam = np.dot(T_World2Cam, world_coords_max)[:3].flatten()
+    x_min_cam, y_min_cam, z_min_cam = np.dot(T_World2Cam, [x_min, y_min, z_min, 1.0])[:3].flatten()
+    x_max_cam, y_max_cam, z_max_cam = np.dot(T_World2Cam, [x_max, y_max, z_max, 1.0])[:3].flatten()
 
     # 根据相机坐标计算像素坐标
     u_min = K_cam[0, 0] * x_min_cam / z_min_cam + K_cam[0, 2]
@@ -177,16 +162,16 @@ def process_rosbag(bag_file, output_dir, tag):
     scene_name = str(scene_time).split('-')[1] + str(scene_time).split('-')[2] + '-' + str(scene_time).split('-')[3] + str(scene_time).split('-')[4]
 
     sweep_lidar_folder = os.path.join(output_dir, 'sweeps/LIDAR_TOP') 
-    # os.makedirs(sweep_lidar_folder, exist_ok=True)
+    os.makedirs(sweep_lidar_folder, exist_ok=True)
 
     sweep_camera_folder = os.path.join(output_dir, 'sweeps/CAM_FRONT') 
-    # os.makedirs(sweep_camera_folder, exist_ok=True)
+    os.makedirs(sweep_camera_folder, exist_ok=True)
 
     sample_lidar_folder = os.path.join(output_dir, 'samples/LIDAR_TOP') 
-    # os.makedirs(sample_lidar_folder, exist_ok=True)
+    os.makedirs(sample_lidar_folder, exist_ok=True)
     
     sample_camera_folder = os.path.join(output_dir, 'samples/CAM_FRONT') 
-    # os.makedirs(sample_camera_folder, exist_ok=True)
+    os.makedirs(sample_camera_folder, exist_ok=True)
 
     scenes = []
     samples = []
@@ -216,9 +201,9 @@ def process_rosbag(bag_file, output_dir, tag):
         obstacle_world_coords_dict = fill_obs_list(anno_open_file)
         calibrated_sensor_token_camera = "sensor_token_camera_open"
         calibrated_sensor_token_lidar = "sensor_token_lidar_open"
-    
 
 # ===================================== Transform Matrix =====================================
+    
     # World2Body
     T_World2Body = np.eye(4)
 
@@ -241,6 +226,7 @@ def process_rosbag(bag_file, output_dir, tag):
 
     # Camera Intrinsic
     K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
+
 # ===================================== Transform Matrix =====================================
 
 
@@ -251,7 +237,17 @@ def process_rosbag(bag_file, output_dir, tag):
     log_token = f"log_token_{scene_name}"
     vehicle = 'Four-Feet Robot'
     logfile = f'{scene_name}_log'
-
+    '''场景是从日志中提取的 20 秒长的连续帧序列。多个场景可以来自同一个日志。请注意，对象身份（实例标记）不会跨场景保留。
+        scene {
+            "token":                   <str> -- Unique record identifier.
+            "name":                    <str> -- Short string identifier.
+            "description":             <str> -- Longer description of the scene.
+            "log_token":               <str> -- Foreign key. Points to log from where the data was extracted.
+            "nbr_samples":             <int> -- Number of samples in this scene.
+            "first_sample_token":      <str> -- Foreign key. Points to the first sample in scene.
+            "last_sample_token":       <str> -- Foreign key. Points to the last sample in scene.
+        }
+    '''
     scene = {
         'token': scene_token,
         'name': scene_name,
@@ -263,6 +259,15 @@ def process_rosbag(bag_file, output_dir, tag):
     }
     scenes.append(scene)
 
+    '''有关从中提取数据的日志的信息。log表包含从中提取数据的日志信息。日志记录对应于我们的自我车辆沿着预定义路线的一次旅行。让我们检查日志的数量和日志的元数据。
+        log {
+            "token":                   <str> -- Unique record identifier.
+            "logfile":                 <str> -- Log file name.
+            "vehicle":                 <str> -- Vehicle name.
+            "date_captured":           <str> -- Date (YYYY-MM-DD).
+            "location":                <str> -- Area where log was captured, e.g. singapore-onenorth.
+        }
+    '''
     log = {
         'token': log_token,
         'vehicle': vehicle,
@@ -283,6 +288,13 @@ def process_rosbag(bag_file, output_dir, tag):
     sensor_token_lidar = "sensor_token_lidar"
 
     # >>> sensor.json >>>
+    '''特定的传感器类型。
+        sensor {
+            "token":                   <str> -- Unique record identifier.
+            "channel":                 <str> -- Sensor channel name.
+            "modality":                <str> {camera, lidar, radar} -- Sensor modality. Supports category(ies) in brackets.
+        }
+    '''
     sensor_camera = {
         'token': sensor_token_camera,
         'channel': 'CAM_FRONT',
@@ -299,7 +311,16 @@ def process_rosbag(bag_file, output_dir, tag):
     cam_translation = t_Body2Lidar - t_Cam2Lidar
     lidar_translation = t_Body2Lidar
 
-    # >>> calibrated_sensors,json >>>
+    # >>> calibrated_sensors.json >>>
+    '''定义在特定车辆上校准的特定传感器（激光雷达/雷达/摄像机）。所有外部参数都是相对于车身坐标给出的。所有相机图像均未失真且经过校正。
+        calibrated_sensor {
+            "token":                   <str> -- Unique record identifier.
+            "sensor_token":            <str> -- Foreign key pointing to the sensor type.
+            "translation":             <float> [3] -- Coordinate system origin in meters: x, y, z.
+            "rotation":                <float> [4] -- Coordinate system orientation as quaternion: w, x, y, z.
+            "camera_intrinsic":        <float> [3, 3] -- Intrinsic camera calibration. Empty for sensors that are not cameras.
+        }
+    '''
     calibrated_sensor_camera = {
         'token': calibrated_sensor_token_camera,
         'sensor_token': sensor_token_camera,
@@ -320,6 +341,7 @@ def process_rosbag(bag_file, output_dir, tag):
 # ======================================== Sensor ========================================
 
 # ==================================== Index and Cache ====================================
+    
     odom_cache = []
     rgb_cache = []
     odom_timestamps = []
@@ -371,9 +393,18 @@ def process_rosbag(bag_file, output_dir, tag):
         rgb_msg = rgb_cache[rgb_index - 1][1] if rgb_index > 0 else rgb_cache[0][1]
 
 # ======================================== ego_pose ========================================
+        
+        '''ego_pose包含关于自车相对于全局坐标系的位置(translation编码)和方向(rotation编码)的信息
+        ego_pose {
+            "token":                   <str> -- Unique record identifier.
+            "translation":             <float> [3] -- Coordinate system origin in meters: x, y, z. Note that z is always 0.
+            "rotation":                <float> [4] -- Coordinate system orientation as quaternion: w, x, y, z.
+            "timestamp":               <int> -- Unix time stamp.
+        }
+        '''
         ego_pose_token = f"ego_token_{scene_name}_{idx:06d}"
         odom_orientation = odom_msg.pose.pose.orientation
-        odom_position = odom_msg.pose.pose.position + t_World2Body
+        odom_position = [odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z] + t_World2Body # 车自身的位移+全局到车的平移向量
         ego_pose = {
             'token': ego_pose_token,
             'timestamp': int(odom_timstamp * 1e6),
@@ -384,29 +415,46 @@ def process_rosbag(bag_file, output_dir, tag):
                 odom_orientation.z
             ],
             'translation': [
-                odom_position.x,
-                odom_position.y,
-                odom_position.z
+                odom_position[0],
+                odom_position[1],
+                odom_position[2]
             ],
         }
         ego_poses.append(ego_pose)
 # ======================================== ego_pose ========================================
         
-        # >>> Save pcd >>>
+        # >>> Save sweeps pcd >>>
         sweep_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
         sweep_bin_path = os.path.join(sweep_lidar_folder, sweep_bin_file)
-        # save_point_cloud_to_pcd(pc_msg, sweep_bin_path)
-        # <<< Save pcd <<<
+        save_point_cloud_to_pcd(pc_msg, sweep_bin_path)
+        # <<< Save sweeps pcd <<<
 
 # ================================================= LIDAR =================================================
 
 # ====================================== lidar_sample_data ======================================
+        
+        '''传感器数据，例如图像、点云或雷达返回。对于 is_key_frame=True 的sample_data，时间戳应该非常接近它指向的样本。对于非关键帧，sample_data 指向时间上最接近的样本。
+            sample_data {
+                "token":                   <str> -- Unique record identifier.
+                "sample_token":            <str> -- Foreign key. Sample to which this sample_data is associated.
+                "ego_pose_token":          <str> -- Foreign key.
+                "calibrated_sensor_token": <str> -- Foreign key.
+                "filename":                <str> -- Relative path to data-blob on disk.
+                "fileformat":              <str> -- Data file format.
+                "width":                   <int> -- If the sample data is an image, this is the image width in pixels.
+                "height":                  <int> -- If the sample data is an image, this is the image height in pixels.
+                "timestamp":               <int> -- Unix time stamp.
+                "is_key_frame":            <bool> -- True if sample_data is part of key_frame, else False.
+                "next":                    <str> -- Foreign key. Sample data from the same sensor that follows this in time. Empty if end of scene.
+                "prev":                    <str> -- Foreign key. Sample data from the same sensor that precedes this in time. Empty if start of scene.
+            }
+        '''
         sd_token_lidar = f"sd_token_{scene_name}_{(idx):06d}"
         sd_lidar = {
             'token': sd_token_lidar,
             'sample_token': sample_token,
             'ego_pose_token': ego_pose_token,
-            'calibrated_sensor_token': sensor_token_lidar,
+            'calibrated_sensor_token': calibrated_sensor_token_lidar,
             'timestamp': int(pc_timestamp * 1e6),
             'fileformat': 'pcd',
             'is_key_frame': is_key_frame,
@@ -418,15 +466,24 @@ def process_rosbag(bag_file, output_dir, tag):
         }
         sample_datas.append(sd_lidar)
         sd_count += 1
+
 # ====================================== lidar_sample_data ======================================
 
 # ======================================== sample ========================================
         if is_key_frame:
             sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
             sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
-            # save_point_cloud_to_pcd(pc_msg, sample_bin_path)
+            save_point_cloud_to_pcd(pc_msg, sample_bin_path)
 
-            # 创建sample条目
+            '''样本是 2 Hz 的带注释的关键帧。作为单次 LIDAR 扫描的一部分，数据在（大约）相同的时间戳处收集。
+                sample {
+                    "token":                   <str> -- Unique record identifier.
+                    "timestamp":               <int> -- Unix time stamp.
+                    "scene_token":             <str> -- Foreign key pointing to the scene.
+                    "next":                    <str> -- Foreign key. Sample that follows this in time. Empty if end of scene.
+                    "prev":                    <str> -- Foreign key. Sample that precedes this in time. Empty if start of scene.
+                }
+            '''
             sample = {
                 'token': sample_token,
                 'timestamp': int(pc_timestamp * 1e6),
@@ -438,10 +495,10 @@ def process_rosbag(bag_file, output_dir, tag):
 # ======================================== sample ========================================
 
 # ======================================== sample_annotation ========================================
+
             quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
             rotation = R.from_quat(quaternion).as_matrix()
-            translation = [odom_position.x, odom_position.y, odom_position.z]
-            T_World2Body[:3, 3] = t_World2Body + translation
+            T_World2Body[:3, 3] = odom_position
             T_World2Body[:3, :3] = rotation
             T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Body2Lidar, T_World2Body))
             
@@ -476,7 +533,22 @@ def process_rosbag(bag_file, output_dir, tag):
                         
                         instance_token = f"instance_token_{scene_name}_{obs_id:06d}"
                         rot_obs = np.array([1,0,0,0]).tolist()
-                        
+                        '''定义样本中所见对象位置的边界框。所有位置数据都是相对于全局坐标系给出的。
+                            sample_annotation {
+                                "token":                   <str> -- Unique record identifier.
+                                "sample_token":            <str> -- Foreign key. NOTE: this points to a sample NOT a sample_data since annotations are done on the sample level taking all relevant sample_data into account.
+                                "instance_token":          <str> -- Foreign key. Which object instance is this annotating. An instance can have multiple annotations over time.
+                                "attribute_tokens":        <str> [n] -- Foreign keys. List of attributes for this annotation. Attributes can change over time, so they belong here, not in the instance table.
+                                "visibility_token":        <str> -- Foreign key. Visibility may also change over time. If no visibility is annotated, the token is an empty string.
+                                "translation":             <float> [3] -- Bounding box location in meters as center_x, center_y, center_z.
+                                "size":                    <float> [3] -- Bounding box size in meters as width, length, height.
+                                "rotation":                <float> [4] -- Bounding box orientation as quaternion: w, x, y, z.
+                                "num_lidar_pts":           <int> -- Number of lidar points in this box. Points are counted during the lidar sweep identified with this sample.
+                                "num_radar_pts":           <int> -- Number of radar points in this box. Points are counted during the radar sweep identified with this sample. This number is summed across all radar sensors without any invalid point filtering.
+                                "next":                    <str> -- Foreign key. Sample annotation from the same object instance that follows this in time. Empty if this is the last annotation for this object.
+                                "prev":                    <str> -- Foreign key. Sample annotation from the same object instance that precedes this in time. Empty if this is the first annotation for this object.
+                            }
+                        '''
                         sample_annotation = {
                             "token": sample_anno_token,  
                             "sample_token": sample_token,
@@ -496,7 +568,12 @@ def process_rosbag(bag_file, output_dir, tag):
                         sample_annotations.append(sample_annotation)
             # 更新每个字典中的next字段  
             for i in range(len(sample_annotations) - 1):  
-                sample_annotations[i]['next'] = sample_annotations[i + 1]['token']  
+                for j in range(i + 1, len(sample_annotations) - 2):
+                    if sample_annotations[i]['instance_token'] == sample_annotations[j]['instance_token']:
+                        sample_annotations[i]['next'] = sample_annotations[j]['token']
+                        sample_annotations[j]['prev'] = sample_annotations[i]['token']
+                        break
+
 # ======================================== sample_annotation ========================================
 
 
@@ -504,6 +581,7 @@ def process_rosbag(bag_file, output_dir, tag):
 
 
 # ============================================= instance =============================================
+            
             instance_data = {}
             sorted_sample_annotations = sorted(sample_annotations, key=lambda x: x['token'])
             for sample_annotation in sorted_sample_annotations:
@@ -513,6 +591,15 @@ def process_rosbag(bag_file, output_dir, tag):
                 category_token = f"category_token_{cat_id:06d}"
 
                 if instance_token not in instance_data:
+                    '''对象实例，例如特定车辆。该表是我们观察到的所有对象实例的枚举。请注意，不会跨场景跟踪实例。
+                        instance {
+                            "token":                   <str> -- Unique record identifier.
+                            "category_token":          <str> -- Foreign key pointing to the object category.
+                            "nbr_annotations":         <int> -- Number of annotations of this instance.
+                            "first_annotation_token":  <str> -- Foreign key. Points to the first annotation of this instance.
+                            "last_annotation_token":   <str> -- Foreign key. Points to the last annotation of this instance.
+                        }
+                    '''
                     instance_data[instance_token] = {
                         "token": instance_token,
                         "category_token": category_token,  # 可根据实际需求设置类别标识符
@@ -526,10 +613,12 @@ def process_rosbag(bag_file, output_dir, tag):
                 instance_data[instance_token]["nbr_annotations"] = instance_data[instance_token]["nbr_annotations"] + 1
 
             instance_list = list(instance_data.values())
+
 # ============================================= instance =============================================
 
 
 # ================================================= IMG =================================================
+    
     obs_count = 0
     sample_idx_rgb = 0
     print("Processing /rgb_data messages...")
@@ -549,11 +638,11 @@ def process_rosbag(bag_file, output_dir, tag):
 
         sample_token = f"sample_token_{scene_name}_{sample_idx_rgb:06d}"
 
-        # >>> Save jpg >>>
+        # >>> Save sweeps jpg >>>
         sweep_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
         sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
-        # save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
-        # <<< Save jpg <<<
+        save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
+        # <<< Save sweeps jpg <<<
 
 # ====================================== sample_data ======================================
 
@@ -563,7 +652,7 @@ def process_rosbag(bag_file, output_dir, tag):
             'token': sd_token_camera,
             'sample_token': sample_token,
             'ego_pose_token': ego_pose_token,
-            'calibrated_sensor_token': sensor_token_camera,
+            'calibrated_sensor_token': calibrated_sensor_token_camera,
             'timestamp': int(img_timestamp * 1e6),
             'fileformat': 'jpg',
             'is_key_frame': is_key_frame,
@@ -575,17 +664,19 @@ def process_rosbag(bag_file, output_dir, tag):
         }
         sample_datas.append(sd_camera)
         sd_count += 1
+
 # ====================================== sample_data ======================================
 
         if is_key_frame:
             sample_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
             sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
-            # save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+            save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
             print(f"Saving key-frame data at {int(img_timestamp * 1e6)}\n")
 
 # ================================================= IMG =================================================
 
 # =============================== prev & next in sample/sample_data ===============================                
+    
     for i in range(len(samples) - 1):
         samples[i]["prev"] = samples[i - 1]["token"] if i > 0 else ''
         samples[i]["next"] = samples[i + 1]["token"]    
@@ -594,6 +685,7 @@ def process_rosbag(bag_file, output_dir, tag):
         sample_datas[i]["prev"] = sample_datas[i - 1]["token"] if i > 0 else ''
         sample_datas[i]["next"] = sample_datas[i + 1]["token"]    
     sample_datas[len(sample_datas) - 1]["prev"] = sample_datas[len(sample_datas) - 2]["token"]
+
 # =============================== prev & next in sample/sample_data ===============================
 
     # Update Scene 
@@ -602,6 +694,7 @@ def process_rosbag(bag_file, output_dir, tag):
     scenes[0]['nbr_samples'] = len(samples)
 
 # ============================================== JSON ==============================================
+    
     metadata = {
         'scene': scenes,
         'sample': samples,
