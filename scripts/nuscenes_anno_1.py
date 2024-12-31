@@ -105,44 +105,66 @@ def is_in_view(pos_obs, K_cam, H, W):
     v = K_cam[1, 1] * y + K_cam[1, 2]
 
     # Behind the camera
-    if z <= 0:
+    if z <= 0 or z >= 30:
         return False
 
     # In the screen
-    if 0 <= u < H and 0 <= v < W:
+    if 0 <= u < W and 0 <= v < H:
         return True
     return False
 
 
-def calculate_visibility(obs_bbox, K_cam, H, W, T_World2Cam):
-    x_min, y_min, z_min, x_max, y_max, z_max = obs_bbox
+def calculate_visible_ratio(bbox_3d, K, image_size, T_World2Cam):
+    """
+    calculate_visible_ratio(K, bbox_3d, image_size)
+    """
+    x_min, y_min, z_min, x_max, y_max, z_max = bbox_3d
+    H, W = image_size
     
-    # 获取相机坐标系下的坐标
-    x_min_cam, y_min_cam, z_min_cam = np.dot(T_World2Cam, [x_min, y_min, z_min, 1.0])[:3].flatten()
-    x_max_cam, y_max_cam, z_max_cam = np.dot(T_World2Cam, [x_max, y_max, z_max, 1.0])[:3].flatten()
-
-    # 根据相机坐标计算像素坐标
-    u_min = K_cam[0, 0] * x_min_cam / z_min_cam + K_cam[0, 2]
-    v_min = K_cam[1, 1] * y_min_cam / z_min_cam + K_cam[1, 2]
+    # 计算三维框的四个顶点的图像坐标
+    def project_to_image(homo):
+        x, y, z, num = homo
+        u = (K[0, 0] * x / z) + K[0, 2]
+        v = (K[1, 1] * y / z) + K[1, 2]
+        return u, v
     
-    u_max = K_cam[0, 0] * x_max_cam / z_max_cam + K_cam[0, 2]
-    v_max = K_cam[1, 1] * y_max_cam / z_max_cam + K_cam[1, 2]
+    # 三维框的8个顶点
+    corners_3d = [
+        (x_min, y_min, z_min, 1),
+        (x_min, y_min, z_max, 1),
+        (x_min, y_max, z_min, 1),
+        (x_min, y_max, z_max, 1),
+        (x_max, y_min, z_min, 1),
+        (x_max, y_min, z_max, 1),
+        (x_max, y_max, z_min, 1),
+        (x_max, y_max, z_max, 1)]
+
+    # 顶点转到相机坐标系
+    cam_corners = [ np.matmul((x,y,z,num), T_World2Cam) for (x, y, z, num) in corners_3d]
     
-    # 计算标注框在图像内的可见区域
-    visible_x_min = max(0, u_min)
-    visible_y_min = max(0, v_min)
-    visible_x_max = min(W, u_max)
-    visible_y_max = min(H, v_max)
-
-    # 如果标注框完全在图像外，则可见度为0
-    if visible_x_min >= visible_x_max or visible_y_min >= visible_y_max:
-        return 0
-
-    # 计算标注框可见部分的面积与原标注框面积的比例
-    visible_area = (visible_x_max - visible_x_min) * (visible_y_max - visible_y_min)
-    total_area = (u_max - u_min) * (v_max - v_min)
-
-    visibility = visible_area / total_area
+    # 顶点转到图像平面
+    projected_points = [project_to_image(homo_coords) for homo_coords in cam_corners]
+    from scipy.spatial import ConvexHull
+    total_hull = ConvexHull(projected_points) if len(projected_points) >= 3 else 0
+    
+    # 计算投影的边界框
+    u_min = min(p[0] for p in projected_points)
+    u_max = max(p[0] for p in projected_points)
+    v_min = min(p[1] for p in projected_points)
+    v_max = max(p[1] for p in projected_points)
+    
+    u_min = max(0, u_min)
+    u_max = min(W, u_max)
+    v_min = max(0, v_min)
+    v_max = min(H, v_max)
+    
+    # 计算投影框的面积
+    projected_area = (u_max - u_min) * (v_max - v_min)
+    
+    if total_hull.area == 0:
+        return 5
+    # 计算可见度比例
+    visibility = projected_area / total_hull.area
     # 根据可见度，返回百分比
     if visibility <= 0.4:
         return 1
@@ -191,33 +213,39 @@ def process_rosbag(bag_file, output_dir, tag):
 
     if tag == 'normal':
         print(f'Reading in a NORMAL situation')
-        t_World2Body = np.array([20, 20, 6.2])
+        t_Global2Ego = np.array([20, 20, 6.2])
         obstacle_world_coords_dict = fill_obs_list(anno_normal_file)
         calibrated_sensor_token_camera = "sensor_token_camera_normal"
         calibrated_sensor_token_lidar = "sensor_token_lidar_normal"
     else:
         print(f'Reading in a OEPN situation')
-        t_World2Body = np.array([20, 20, 0.1])
+        t_Global2Ego = np.array([20, 20, 0.1])
         obstacle_world_coords_dict = fill_obs_list(anno_open_file)
         calibrated_sensor_token_camera = "sensor_token_camera_open"
         calibrated_sensor_token_lidar = "sensor_token_lidar_open"
 
 # ===================================== Transform Matrix =====================================
     
-    # World2Body
-    T_World2Body = np.eye(4)
+    # Global2Ego
+    T_Global2Ego = np.eye(4)
 
-    # Body2Lidar
-    T_Body2Lidar = np.eye(4)
-    t_Body2Lidar = np.array([0.045, 0, 0.18])
-    T_Body2Lidar[:3, 3] = t_Body2Lidar
+    # Ego2Lidar
+    T_Ego2Lidar = np.eye(4)
+    r_Ego2Lidar = np.array([
+        [ 0, -1,  0],   # X_l = -Y_e
+        [ 1,  0,  0],   # Y_l =  X_e
+        [ 0,  0,  1]    # Z_l =  Z_e
+    ])
+    t_Ego2Lidar = np.array([0.045, 0, 0.18])
+    T_Ego2Lidar[:3, :3] = r_Ego2Lidar
+    T_Ego2Lidar[:3, 3] = t_Ego2Lidar
 
     # Cam2Lidar -> Lidar2Cam
     T_Cam2Lidar = np.eye(4)
     r_Cam2Lidar = np.array([
-        [ 0,  0,  1],   # Xl ->  Zc
-        [-1,  0,  0],   # Yl -> -Xc
-        [ 0, -1,  0]    # Zl -> -Yc
+        [ 0,  0,  1],   # Xl =  Zc
+        [-1,  0,  0],   # Yl = -Xc
+        [ 0, -1,  0]    # Zl = -Yc
     ])
     t_Cam2Lidar = np.array([-0.105, 0, 0.14])
     T_Cam2Lidar[:3, :3] = r_Cam2Lidar
@@ -228,7 +256,6 @@ def process_rosbag(bag_file, output_dir, tag):
     K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
 
 # ===================================== Transform Matrix =====================================
-
 
 
 # ===================================== Scene & Log =====================================
@@ -308,8 +335,8 @@ def process_rosbag(bag_file, output_dir, tag):
     sensors.extend([sensor_camera, sensor_lidar])
     # <<< sensor <<<
 
-    cam_translation = t_Body2Lidar - t_Cam2Lidar
-    lidar_translation = t_Body2Lidar
+    cam_translation = t_Ego2Lidar - t_Cam2Lidar
+    lidar_translation = t_Ego2Lidar
 
     # >>> calibrated_sensors.json >>>
     '''定义在特定车辆上校准的特定传感器（激光雷达/雷达/摄像机）。所有外部参数都是相对于车身坐标给出的。所有相机图像均未失真且经过校正。
@@ -404,7 +431,13 @@ def process_rosbag(bag_file, output_dir, tag):
         '''
         ego_pose_token = f"ego_token_{scene_name}_{idx:06d}"
         odom_orientation = odom_msg.pose.pose.orientation
-        odom_position = [odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z] + t_World2Body # 车自身的位移+全局到车的平移向量
+        quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
+        rotation = R.from_quat(quaternion).as_matrix()
+        odom_pos = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z])
+        odom_position = t_Global2Ego + np.matmul(rotation, odom_pos) # t_g = t_0 + R_n * t_n
+        T_Global2Ego[:3, 3] = odom_position
+        T_Global2Ego[:3, :3] = rotation
+        T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
         ego_pose = {
             'token': ego_pose_token,
             'timestamp': int(odom_timstamp * 1e6),
@@ -496,11 +529,6 @@ def process_rosbag(bag_file, output_dir, tag):
 
 # ======================================== sample_annotation ========================================
 
-            quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
-            rotation = R.from_quat(quaternion).as_matrix()
-            T_World2Body[:3, 3] = odom_position
-            T_World2Body[:3, :3] = rotation
-            T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Body2Lidar, T_World2Body))
             
             for obs in obstacle_world_coords_dict:
                     pos_obs = obs['pos']
@@ -514,13 +542,16 @@ def process_rosbag(bag_file, output_dir, tag):
                     # <<< bbox_coords <<<                 
                         
                     if (is_in_view(pos_cam, K, rgb_msg.height, rgb_msg.width)):
+                        visibility = calculate_visible_ratio([x_min, y_min, z_min, x_max, y_max, z_max], K, (rgb_msg.height, rgb_msg.width), T_World2Cam)
+                        if visibility == 5:
+                            continue
+                        print(f'{pos_obs} can be seem at {odom_position}\n')
                         sample_anno_token = f'sa_token_{scene_name}_{obs_count:06d}'
                         prev_token = sample_annotations[obs_count - 1]['token'] if obs_count > 0 else ''  
                         next_token = ''  # 默认为空，后续将在列表末尾添加  
                         obs_count = obs_count + 1
                         obs_id = obs["id"]
 
-                        visibility = calculate_visibility([x_min, y_min, z_min, x_max, y_max, z_max], K, rgb_msg.height, rgb_msg.width, T_World2Cam)
                         print(f"visibility level: v-{visibility}")
                         
                         label = obs['label']
