@@ -256,8 +256,6 @@ def process_rosbag(bag_file, output_dir, tag):
     T_Cam2Lidar[:3, 3] = t_Cam2Lidar
     T_Lidar2Cam = np.linalg.inv(T_Cam2Lidar)
 
-    T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
-
     # Camera Intrinsic
     K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
 
@@ -442,7 +440,9 @@ def process_rosbag(bag_file, output_dir, tag):
         odom_pos = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z])
         T_Global2Ego[:3, :3] = rotation.T
         T_Global2Ego[:3, 3] = - np.dot(rotation.T, t_Global2Ego)
+        T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
         odom_position = t_Global2Ego + odom_pos
+
 
         ego_pose = {
             'token': ego_pose_token,
