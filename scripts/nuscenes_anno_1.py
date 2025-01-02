@@ -213,44 +213,50 @@ def process_rosbag(bag_file, output_dir, tag):
 
     if tag == 'normal':
         print(f'Reading in a NORMAL situation')
-        t_Global2Ego = np.array([20, 20, 6.2])
+        t_Global2Ego = np.array([20.0, 20.0, 6.2])
         obstacle_world_coords_dict = fill_obs_list(anno_normal_file)
         calibrated_sensor_token_camera = "sensor_token_camera_normal"
         calibrated_sensor_token_lidar = "sensor_token_lidar_normal"
     else:
-        print(f'Reading in a OEPN situation')
-        t_Global2Ego = np.array([20, 20, 0.1])
+        print(f'Reading in a OPEN situation')
+        t_Global2Ego = np.array([0.0, 0.0, 0.1])
         obstacle_world_coords_dict = fill_obs_list(anno_open_file)
         calibrated_sensor_token_camera = "sensor_token_camera_open"
         calibrated_sensor_token_lidar = "sensor_token_lidar_open"
 
 # ===================================== Transform Matrix =====================================
-    
+
     # Global2Ego
     T_Global2Ego = np.eye(4)
 
     # Ego2Lidar
     T_Ego2Lidar = np.eye(4)
-    r_Ego2Lidar = np.array([
+    r_Ego2Lidar = np.transpose(
+        np.array([
         [ 0, -1,  0],   # X_l = -Y_e
         [ 1,  0,  0],   # Y_l =  X_e
         [ 0,  0,  1]    # Z_l =  Z_e
-    ])
-    t_Ego2Lidar = np.array([0.045, 0, 0.18])
+        ])
+    )
+    t_Ego2Lidar = - np.dot(r_Ego2Lidar, np.array([0.045, 0, 0.18]))
     T_Ego2Lidar[:3, :3] = r_Ego2Lidar
     T_Ego2Lidar[:3, 3] = t_Ego2Lidar
 
     # Cam2Lidar -> Lidar2Cam
     T_Cam2Lidar = np.eye(4)
-    r_Cam2Lidar = np.array([
-        [ 0,  0,  1],   # Xl =  Zc
-        [-1,  0,  0],   # Yl = -Xc
-        [ 0, -1,  0]    # Zl = -Yc
-    ])
-    t_Cam2Lidar = np.array([-0.105, 0, 0.14])
+    r_Cam2Lidar = np.transpose(
+        np.array([
+        [ 1,  0,  0],   # X_l =  X_c
+        [ 0,  0,  1],   # Y_l =  Z_c
+        [ 0, -1,  0]    # Z_l = -Y_c
+        ])
+    )
+    t_Cam2Lidar = - np.dot(r_Cam2Lidar, np.array([-0.105, 0, 0.14]))
     T_Cam2Lidar[:3, :3] = r_Cam2Lidar
     T_Cam2Lidar[:3, 3] = t_Cam2Lidar
     T_Lidar2Cam = np.linalg.inv(T_Cam2Lidar)
+
+    T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
 
     # Camera Intrinsic
     K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
@@ -368,7 +374,7 @@ def process_rosbag(bag_file, output_dir, tag):
 # ======================================== Sensor ========================================
 
 # ==================================== Index and Cache ====================================
-    
+
     odom_cache = []
     rgb_cache = []
     odom_timestamps = []
@@ -396,14 +402,14 @@ def process_rosbag(bag_file, output_dir, tag):
     sd_count = 0
     print("Processing /pc_scan messages...")
     for idx, (topic, pc_msg, t) in enumerate(tqdm(bag.read_messages(topics=['/pc_scan']))):
-    
+
         pc_timestamp = t.to_sec()
         is_key_frame = False
-        
+
         # 2Hz key frame
         if idx == 0:
             is_key_frame = True
-            
+
         if (idx % 5 == 0) and (idx != 0):
             is_key_frame = True
             sample_idx = sample_idx + 1
@@ -414,13 +420,13 @@ def process_rosbag(bag_file, output_dir, tag):
         # 根据pcd的timestamp获取最近的odom和rgb数据
         odom_index = bisect_left(odom_timestamps, pc_timestamp)
         rgb_index = bisect_left(rgb_timestamps, pc_timestamp)
-        
+
         odom_msg = odom_cache[odom_index - 1][1] if odom_index > 0 else odom_cache[0][1]
         odom_timstamp = odom_cache[odom_index - 1][0] if odom_index > 0 else odom_cache[0][1]
         rgb_msg = rgb_cache[rgb_index - 1][1] if rgb_index > 0 else rgb_cache[0][1]
 
 # ======================================== ego_pose ========================================
-        
+
         '''ego_pose包含关于自车相对于全局坐标系的位置(translation编码)和方向(rotation编码)的信息
         ego_pose {
             "token":                   <str> -- Unique record identifier.
@@ -434,10 +440,10 @@ def process_rosbag(bag_file, output_dir, tag):
         quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
         rotation = R.from_quat(quaternion).as_matrix()
         odom_pos = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z])
-        odom_position = t_Global2Ego + np.matmul(rotation, odom_pos) # t_g = t_0 + R_n * t_n
-        T_Global2Ego[:3, 3] = odom_position
-        T_Global2Ego[:3, :3] = rotation
-        T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
+        T_Global2Ego[:3, :3] = rotation.T
+        T_Global2Ego[:3, 3] = - np.dot(rotation.T, t_Global2Ego)
+        odom_position = t_Global2Ego + odom_pos
+
         ego_pose = {
             'token': ego_pose_token,
             'timestamp': int(odom_timstamp * 1e6),
@@ -459,14 +465,14 @@ def process_rosbag(bag_file, output_dir, tag):
         # >>> Save sweeps pcd >>>
         sweep_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
         sweep_bin_path = os.path.join(sweep_lidar_folder, sweep_bin_file)
-        save_point_cloud_to_pcd(pc_msg, sweep_bin_path)
+        # save_point_cloud_to_pcd(pc_msg, sweep_bin_path)
         # <<< Save sweeps pcd <<<
 
 # ================================================= LIDAR =================================================
 
 # ====================================== lidar_sample_data ======================================
         
-        '''传感器数据，例如图像、点云或雷达返回。对于 is_key_frame=True 的sample_data，时间戳应该非常接近它指向的样本。对于非关键帧，sample_data 指向时间上最接近的样本。
+        '''传感器数据，例如图像、点云或雷达返回。对于 is_key_frame=True 的sample_data,时间戳应该非常接近它指向的样本。对于非关键帧,sample_data 指向时间上最接近的样本。
             sample_data {
                 "token":                   <str> -- Unique record identifier.
                 "sample_token":            <str> -- Foreign key. Sample to which this sample_data is associated.
@@ -506,7 +512,7 @@ def process_rosbag(bag_file, output_dir, tag):
         if is_key_frame:
             sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
             sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
-            save_point_cloud_to_pcd(pc_msg, sample_bin_path)
+            # save_point_cloud_to_pcd(pc_msg, sample_bin_path)
 
             '''样本是 2 Hz 的带注释的关键帧。作为单次 LIDAR 扫描的一部分，数据在（大约）相同的时间戳处收集。
                 sample {
@@ -672,7 +678,7 @@ def process_rosbag(bag_file, output_dir, tag):
         # >>> Save sweeps jpg >>>
         sweep_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
         sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
-        save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
+        # save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
         # <<< Save sweeps jpg <<<
 
 # ====================================== sample_data ======================================
@@ -701,8 +707,8 @@ def process_rosbag(bag_file, output_dir, tag):
         if is_key_frame:
             sample_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
             sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
-            save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
-            print(f"Saving key-frame data at {int(img_timestamp * 1e6)}\n")
+            # save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+            # print(f"Saving key-frame data at {int(img_timestamp * 1e6)}\n")
 
 # ================================================= IMG =================================================
 
