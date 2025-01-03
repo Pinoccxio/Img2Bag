@@ -7,8 +7,10 @@ import struct
 import sensor_msgs.point_cloud2 as pc2
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation as R
+from pyquaternion import Quaternion
 from tqdm import tqdm
 from bisect import bisect_left
+from nuscenes.utils import geometry_utils, data_classes
 
 
 # python nuscenes_anno_1.py --bag /home/cx/dataset/isaac_sim/isaac_bags/2024-09-30-09-10-54.bag --output_dir /home/cx/dataset/isaac_sim/dataset/0930_0910 --tag normal
@@ -114,7 +116,7 @@ def is_in_view(pos_obs, K_cam, H, W):
     return False
 
 
-def calculate_visible_ratio(bbox_3d, K, image_size, T_World2Cam):
+def calculate_visible_ratio(bbox_3d, K, image_size, T_Global2Cam):
     """
     calculate_visible_ratio(K, bbox_3d, image_size)
     """
@@ -140,7 +142,7 @@ def calculate_visible_ratio(bbox_3d, K, image_size, T_World2Cam):
         (x_max, y_max, z_max, 1)]
 
     # 顶点转到相机坐标系
-    cam_corners = [ np.matmul((x,y,z,num), T_World2Cam) for (x, y, z, num) in corners_3d]
+    cam_corners = [ np.matmul((x,y,z,num), T_Global2Cam) for (x, y, z, num) in corners_3d]
     
     # 顶点转到图像平面
     projected_points = [project_to_image(homo_coords) for homo_coords in cam_corners]
@@ -213,54 +215,16 @@ def process_rosbag(bag_file, output_dir, tag):
 
     if tag == 'normal':
         print(f'Reading in a NORMAL situation')
-        t_Global2Ego = np.array([20.0, 20.0, 6.2])
+        ego_init = np.array([20.0, 20.0, 6.2])
         obstacle_world_coords_dict = fill_obs_list(anno_normal_file)
         calibrated_sensor_token_camera = "sensor_token_camera_normal"
         calibrated_sensor_token_lidar = "sensor_token_lidar_normal"
     else:
         print(f'Reading in a OPEN situation')
-        t_Global2Ego = np.array([0.0, 0.0, 0.1])
+        ego_init = np.array([0.0, 0.0, 0.1])
         obstacle_world_coords_dict = fill_obs_list(anno_open_file)
         calibrated_sensor_token_camera = "sensor_token_camera_open"
         calibrated_sensor_token_lidar = "sensor_token_lidar_open"
-
-# ===================================== Transform Matrix =====================================
-
-    # Global2Ego
-    T_Global2Ego = np.eye(4)
-
-    # Ego2Lidar
-    T_Ego2Lidar = np.eye(4)
-    r_Ego2Lidar = np.transpose(
-        np.array([
-        [ 0, -1,  0],   # X_l = -Y_e
-        [ 1,  0,  0],   # Y_l =  X_e
-        [ 0,  0,  1]    # Z_l =  Z_e
-        ])
-    )
-    t_Ego2Lidar = - np.dot(r_Ego2Lidar, np.array([0.045, 0, 0.18]))
-    T_Ego2Lidar[:3, :3] = r_Ego2Lidar
-    T_Ego2Lidar[:3, 3] = t_Ego2Lidar
-
-    # Cam2Lidar -> Lidar2Cam
-    T_Cam2Lidar = np.eye(4)
-    r_Cam2Lidar = np.transpose(
-        np.array([
-        [ 1,  0,  0],   # X_l =  X_c
-        [ 0,  0,  1],   # Y_l =  Z_c
-        [ 0, -1,  0]    # Z_l = -Y_c
-        ])
-    )
-    t_Cam2Lidar = - np.dot(r_Cam2Lidar, np.array([-0.105, 0, 0.14]))
-    T_Cam2Lidar[:3, :3] = r_Cam2Lidar
-    T_Cam2Lidar[:3, 3] = t_Cam2Lidar
-    T_Lidar2Cam = np.linalg.inv(T_Cam2Lidar)
-
-    # Camera Intrinsic
-    K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
-
-# ===================================== Transform Matrix =====================================
-
 
 # ===================================== Scene & Log =====================================
 
@@ -318,6 +282,14 @@ def process_rosbag(bag_file, output_dir, tag):
     sensor_token_camera = "sensor_token_camera"
     sensor_token_lidar = "sensor_token_lidar"
 
+    t_E2L = np.array([0.045, 0, 0.18])
+    t_C2L = np.array([-0.105, 0, 0.14])
+    cam_translation = t_E2L - t_C2L
+    lidar_translation = t_E2L
+
+    # Camera Intrinsic
+    K = np.array([[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]])
+
     # >>> sensor.json >>>
     '''特定的传感器类型。
         sensor {
@@ -339,8 +311,17 @@ def process_rosbag(bag_file, output_dir, tag):
     sensors.extend([sensor_camera, sensor_lidar])
     # <<< sensor <<<
 
-    cam_translation = t_Ego2Lidar - t_Cam2Lidar
-    lidar_translation = t_Ego2Lidar
+    r_Lidar2Ego = np.array([[ 0,  1,  0],   # X_l = -Y_e
+                            [-1,  0,  0],   # Y_l =  X_e
+                            [ 0,  0,  1]])  # Z_l =  Z_e
+
+    quat_Lidar2Ego = R.from_matrix(r_Lidar2Ego).as_quat()
+
+    r_Cam2Ego = np.array([  [ 0,  0,  1],   # X_c = -Y_e
+                            [-1,  0,  0],   # Y_c = -Z_e
+                            [ 0, -1,  0]])  # Z_c =  X_e
+    
+    quat_Cam2Ego = R.from_matrix(r_Cam2Ego).as_quat()
 
     # >>> calibrated_sensors.json >>>
     '''定义在特定车辆上校准的特定传感器（激光雷达/雷达/摄像机）。所有外部参数都是相对于车身坐标给出的。所有相机图像均未失真且经过校正。
@@ -355,15 +336,15 @@ def process_rosbag(bag_file, output_dir, tag):
     calibrated_sensor_camera = {
         'token': calibrated_sensor_token_camera,
         'sensor_token': sensor_token_camera,
-        'translation': cam_translation.tolist(),  # 自行设置
-        'rotation': [1, 0, 0, 0],  # 单位四元数
+        'translation': cam_translation.tolist(), 
+        'rotation': [quat_Cam2Ego[3], quat_Cam2Ego[0], quat_Cam2Ego[1], quat_Cam2Ego[2]], 
         'camera_intrinsic': [[958.8, 0, 957.8], [0, 956.7, 589.5], [0, 0, 1]],
     }
     calibrated_sensor_lidar = {
         'token': calibrated_sensor_token_lidar,
         'sensor_token': sensor_token_lidar,
         'translation': lidar_translation.tolist(),
-        'rotation': [1, 0, 0, 0],
+        'rotation': [quat_Lidar2Ego[3], quat_Lidar2Ego[0], quat_Lidar2Ego[1], quat_Lidar2Ego[2]],
         'camera_intrinsic': []
     }
     calibrated_sensors.extend([calibrated_sensor_camera, calibrated_sensor_lidar])
@@ -438,11 +419,48 @@ def process_rosbag(bag_file, output_dir, tag):
         quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
         rotation = R.from_quat(quaternion).as_matrix()
         odom_pos = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z])
-        T_Global2Ego[:3, :3] = rotation.T
-        T_Global2Ego[:3, 3] = - np.dot(rotation.T, t_Global2Ego)
-        T_World2Cam = np.dot(T_Lidar2Cam, np.dot(T_Ego2Lidar, T_Global2Ego))
-        odom_position = t_Global2Ego + odom_pos
 
+        # ===================================== Transform Matrix =====================================
+
+        # >>> Global2Ego >>>
+        T_Global2Ego = np.eye(4)
+        # R_g2e
+        r_Global2Ego = rotation.T
+        T_Global2Ego[:3, :3] = r_Global2Ego 
+        # t_g2e
+        t_Global2Ego = ego_init + odom_pos
+        T_Global2Ego[:3, 3] = -np.dot(r_Global2Ego, t_Global2Ego)  
+        # <<< Global2Ego <<<
+
+        # >>> Ego2Lidar & Ego2Cam >>>
+        r_Ego2Lidar = np.array([[ 0, -1,  0],   # X_l = -Y_e
+                                [ 1,  0,  0],   # Y_l =  X_e
+                                [ 0,  0,  1]])  # Z_l =  Z_e
+        t_Ego2Lidar = np.array([0.045, 0, 0.18])
+
+        r_Ego2Cam = np.array([  [ 0, -1,  0],   # X_c = -Y_e
+                                [ 0,  0, -1],   # Y_c = -Z_e
+                                [ 1,  0,  0]])  # Z_c =  X_e
+        t_Cam2Lidar = np.array([-0.105, 0, 0.14])
+        t_Ego2Cam = t_Ego2Lidar - t_Cam2Lidar
+        # <<< Ego2Lidar & Ego2Cam <<<
+        
+        # >>> Global2Lidar >>>
+        T_Global2Lidar = np.eye(4)
+        r_Global2Lidar = np.dot(r_Ego2Lidar, r_Global2Ego)
+        T_Global2Lidar[:3, :3] = r_Global2Lidar
+        t_Global2Lidar = t_Global2Ego + t_Ego2Lidar
+        T_Global2Lidar[:3, 3] = - np.dot(r_Global2Lidar, t_Global2Lidar)
+        # <<< Global2Lidar <<<
+
+        # >>> Global2Cam >>>
+        T_Global2Cam = np.eye(4)
+        r_Global2Cam = np.dot(r_Ego2Cam, r_Global2Ego)
+        T_Global2Cam[:3, :3] = r_Global2Cam
+        t_Global2Cam = t_Global2Ego + t_Ego2Cam
+        T_Global2Cam[:3, 3] = - np.dot(r_Global2Cam, t_Global2Cam)
+        # <<< Global2Cam <<<
+    # ===================================== Transform Matrix =====================================
 
         ego_pose = {
             'token': ego_pose_token,
@@ -454,9 +472,9 @@ def process_rosbag(bag_file, output_dir, tag):
                 odom_orientation.z
             ],
             'translation': [
-                odom_position[0],
-                odom_position[1],
-                odom_position[2]
+                t_Global2Ego[0],
+                t_Global2Ego[1],
+                t_Global2Ego[2]
             ],
         }
         ego_poses.append(ego_pose)
@@ -539,19 +557,27 @@ def process_rosbag(bag_file, output_dir, tag):
             for obs in obstacle_world_coords_dict:
                     pos_obs = obs['pos']
                     pos_obs_homo = [pos_obs[0], pos_obs[1], pos_obs[2], 1]
-                    pos_cam = np.dot(T_World2Cam, pos_obs_homo)
+                    pos_cam = np.dot(T_Global2Cam, pos_obs_homo)
                     size_obs = obs['size'].tolist()
+                    rot_obs = np.array([1,0,0,0]).tolist()
                     
+                    box = data_classes.Box(pos_obs, size_obs, Quaternion(rot_obs), name = obs['category'])
+                    box.translate(-np.array(ego_pose['translation']))
+                    box.rotate(Quaternion(ego_pose['rotation']).inverse)
+
+                    box.translate(-np.array(calibrated_sensor_camera['translation']))
+                    box.rotate(Quaternion(calibrated_sensor_camera['rotation']).inverse)
+
                     # >>> bbox_coords >>>
                     x_min, y_min, z_min = pos_obs[0] - size_obs[0] / 2, pos_obs[1] - size_obs[1] / 2, pos_obs[2] - size_obs[2] / 2
                     x_max, y_max, z_max = pos_obs[0] + size_obs[0] / 2, pos_obs[1] + size_obs[1] / 2, pos_obs[2] + size_obs[2] / 2
+                    
                     # <<< bbox_coords <<<                 
-                        
-                    if (is_in_view(pos_cam, K, rgb_msg.height, rgb_msg.width)):
-                        visibility = calculate_visible_ratio([x_min, y_min, z_min, x_max, y_max, z_max], K, (rgb_msg.height, rgb_msg.width), T_World2Cam)
+                    if (geometry_utils.box_in_image(box, K, [rgb_msg.width, rgb_msg.height], 1)):
+                        visibility = calculate_visible_ratio([x_min, y_min, z_min, x_max, y_max, z_max], K, (rgb_msg.height, rgb_msg.width), T_Global2Cam)
                         if visibility == 5:
-                            continue
-                        print(f'{pos_obs} can be seem at {odom_position}\n')
+                            continue        
+                        print(f'{pos_obs} can be seem at {t_Global2Ego}\n')
                         sample_anno_token = f'sa_token_{scene_name}_{obs_count:06d}'
                         prev_token = sample_annotations[obs_count - 1]['token'] if obs_count > 0 else ''  
                         next_token = ''  # 默认为空，后续将在列表末尾添加  
@@ -569,7 +595,7 @@ def process_rosbag(bag_file, output_dir, tag):
                         # print(f"{num_lidar_pts} lidar points in label-{label}\n")
                         
                         instance_token = f"instance_token_{scene_name}_{obs_id:06d}"
-                        rot_obs = np.array([1,0,0,0]).tolist()
+                        
                         '''定义样本中所见对象位置的边界框。所有位置数据都是相对于全局坐标系给出的。
                             sample_annotation {
                                 "token":                   <str> -- Unique record identifier.
