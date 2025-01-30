@@ -89,26 +89,6 @@ def fill_obs_list(json_file):
     return obstacle_world_coords_dict
 
 
-def is_in_view(pos_obs, K_cam, H, W):
-    # Obstacle coords
-    z = pos_obs[2]
-    x = pos_obs[0]/z
-    y = pos_obs[1]/z
-
-    # Pixel
-    u = K_cam[0, 0] * x + K_cam[0, 2]
-    v = K_cam[1, 1] * y + K_cam[1, 2]
-
-    # Behind the camera
-    if z <= 0 or z >= 30:
-        return False
-
-    # In the screen
-    if 0 <= u < W and 0 <= v < H:
-        return True
-    return False
-
-
 def post_process_coords(
     corner_coords: List, imsize: Tuple[int, int] = (1920, 1200)
 ) -> Union[np.ndarray, None]:
@@ -203,9 +183,8 @@ def process_rosbag(bag_file, output_dir):
     save_pcd = True
     save_img = True
     print(f'Reading in a OPEN situation')
-    ego_init = np.array([0.0, 0.0, 0.3])
+    ego_init = np.array([0.0, 0.0, 0.3], dtype=np.float32)
 
-    anno_open_file = '/home/cx/dataset/isaac_sim/annotations_open.json'
     anno_new_file = '/home/cx/dataset/isaac_sim/info.json'
     anno_test_file = '/home/cx/dataset/isaac_sim/annotations_test.json'
 
@@ -405,8 +384,8 @@ def process_rosbag(bag_file, output_dir):
         ego_pose_token = f"ego_token_{scene_name}_{idx:06d}"
         odom_orientation = odom_msg.pose.pose.orientation
         quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
-        rotation = R.from_quat(quaternion).as_matrix()
-        quat_inv = R.from_quat(quaternion).inv().as_quat()
+        # rotation = R.from_quat(quaternion).as_matrix()
+        # quat_inv = R.from_quat(quaternion).inv().as_quat()
         odom_pos = np.array([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z])
         t_Global2Ego = ego_init + odom_pos
 
