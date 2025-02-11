@@ -5,29 +5,98 @@ import numpy as np
 import os
 import json
 from tqdm import tqdm
+from bisect import bisect_left
+from scipy.spatial.transform import Rotation as R
 
 # 打开 ROS bag 文件
 bag = rosbag.Bag('/home/cx/dataset/isaac_sim/2025-01-22-19-30-37.bag')
 obstacle_json = '/home/cx/dataset/isaac_sim/info.json'
 saved_folder = '/home/cx/dataset/isaac_sim/dataset'
 
-# # 存储所有点云的列表
-# all_points = []
+# 保存数据的文件路径
+output_file = os.path.join(saved_folder, 'pcd.npy')
 
-# print('Reading pcd')
-# # 获取点云消息
-# for idx, (topic, msg, t) in enumerate(tqdm(bag.read_messages(topics=['/pc_scan']))):
-#     pc_data = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
-#     points = np.array(list(pc_data))
-#     all_points.append(points)
+# 存储所有点云的列表
+all_points = []
+# batch_size = 500  # 每批处理500个点云
+points_cache = []
+odom_cache = []
+odom_timestamps = []
+lidar_translation = np.array([0.045, 0, 0.18])
+ego_init = np.array([0.0, 0.0, 0.3], dtype=np.float32)
 
-# np.save(os.path.join(saved_folder, 'pcd.npy'), all_points)
 
-# # 关闭 bag 文件
-# bag.close()
-# print('bag closed')
+print('Reading odom')
+odom_count = 0
+for idx, (topic, msg, t) in enumerate(tqdm(bag.read_messages(topics=['/odom']))):
+    if idx % 5 != 0:
+        continue
+    odom_timestamp = t.to_sec()
+    odom_orientation = msg.pose.pose.orientation
+    odom_position = msg.pose.pose.position
+    odom_timestamps.append(odom_timestamp)
+    odom_cache.append((odom_timestamp, msg))
+    odom_count += 1
+print(f'{odom_count} odom msg saved')
+    
 
-all_points = np.load(os.path.join(saved_folder, 'pcd.npy'), allow_pickle=True)
+print('Reading pcd')
+pc_count = 0
+batch_points = []  # 用于存储当前批次的点云数据
+# 获取点云消息
+for idx, (topic, msg, t) in enumerate(tqdm(bag.read_messages(topics=['/pc_scan']))):
+    if idx % 5 != 0:
+        continue
+    pc_idx = idx // 5
+    pc_timestamp = t.to_sec()
+    pc_data = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+
+    odom_index = bisect_left(odom_timestamps, pc_timestamp)
+    odom_msg = odom_cache[odom_index - 1][1] if odom_index > 0 else odom_cache[0][1]
+    # odom_msg = odom_cache[pc_idx - 1][1] if pc_idx > 0 else odom_cache[0][1]
+    odom_orientation = odom_msg.pose.pose.orientation
+    quaternion = [odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w]
+    odom_rot = R.from_quat(quaternion).as_matrix()
+
+    odom_position = odom_msg.pose.pose.position
+    odom_pos = np.array([odom_position.x, odom_position.y, odom_position.z])
+    
+
+    for point in pc_data:
+        point_ego = point - lidar_translation
+        point_global = np.dot(odom_rot ,point_ego) + odom_pos + ego_init
+        points_cache.append(point_global)
+
+print('Saving to npy')
+np.save(output_file, points_cache)
+
+    # # 每达到批次大小，保存并清空当前批次数据
+    # if len(batch_points) >= batch_size:
+    #     # 将当前批次的数据追加到文件中
+    #     if not os.path.exists(output_file):
+    #         np.save(output_file, np.array(batch_points))
+    #     else:
+    #         existing_data = np.load(output_file, allow_pickle=True)
+    #         updated_data = np.vstack((existing_data, np.array(batch_points)))
+    #         np.save(output_file, updated_data)
+        
+    #     # 清空当前批次数据
+    #     batch_points = []
+
+# # 保存剩余未处理的数据
+# if batch_points:
+#     if not os.path.exists(output_file):
+#         np.save(output_file, np.array(batch_points))
+#     else:
+#         existing_data = np.load(output_file, allow_pickle=True)
+#         updated_data = np.vstack((existing_data, np.array(batch_points)))
+#         np.save(output_file, updated_data)
+
+# 关闭 bag 文件
+bag.close()
+print('bag closed')
+
+all_points = np.load(output_file, allow_pickle=True)
 all_points = np.concatenate(all_points, axis=0)
 print('pcd_data loaded')
 # <<< point cloud export <<<
@@ -35,6 +104,7 @@ print('pcd_data loaded')
 # >>> remove objects >>> 
 
 # 读取 JSON 文件中的障碍物信息
+print('reading json ...')
 with open(obstacle_json, 'r') as f:
     obstacles_data = json.load(f)
 
@@ -67,22 +137,6 @@ np.save(valid_points_file, cleaned_points)
 print('removed obstacles')
 
 # <<< remove objects <<<
-# ==========================================================================================================
-# >>> cluster by height >>> 
-
-# from sklearn.cluster import KMeans
-
-# # 提取 z 坐标进行聚类
-# z_values = cleaned_points[:, 2].reshape(-1, 1)
-
-# # 使用 KMeans 聚类
-# kmeans = KMeans(n_clusters=3)  # 假设有 3 个簇
-# labels = kmeans.fit_predict(z_values)
-
-# # 将聚类标签添加到点云数据中
-# cleaned_points_with_labels = np.hstack((cleaned_points, labels.reshape(-1, 1)))
-
-# <<< cluster by height <<<
 # ==========================================================================================================
 # >>> classify type >>> 
 
