@@ -36,7 +36,7 @@ def calculate_ring_index(point):
     r = np.sqrt(x**2 + y**2)
     angle = np.arctan2(z, r) * 180 / np.pi  # 将 z 值和 r 值转换为角度（单位：度）
 
-    # 限制角度在 min_angle 和 max_angle 范围内
+    #! 这可能造成数据失真 是否需要加一个flag，如果在FOV外，就返回-1，表示这个点不在FOV内，从而后续把它滤除？
     if angle < min_angle:
         angle = min_angle
     elif angle > max_angle:
@@ -65,6 +65,14 @@ def save_point_cloud_to_pcd(point_cloud_data, bin_file):
 
 def save_image_to_jpg(image_msg, image_file, bridge):
     cv_image = bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
+    cv2.imwrite(image_file, cv_image)
+
+#! 新增 在服务器docker里 bridge.imgmsg_to_cv2() 会有版本问题，所以另写了这个
+def save_image_to_jpg_np(image_msg, image_file):
+    img_data = np.frombuffer(image_msg.data, dtype=np.uint8)
+    cv_image = img_data.reshape((image_msg.height, image_msg.width, -1))
+    if image_msg.encoding == 'rgb8':
+        cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
     cv2.imwrite(image_file, cv_image)
 
 
@@ -277,13 +285,13 @@ def process_rosbag(bag_file, output_dir):
     sensors.extend([sensor_camera, sensor_lidar])
     # <<< sensor <<<
 
-    r_Lidar2Ego = np.array([[ 0,  1,  0],   # X_l = -Y_e
+    r_Lidar2Ego = np.array([[ 0,  1,  0],   # X_l = -Y_e   p_e = r @ p_l
                             [-1,  0,  0],   # Y_l =  X_e
                             [ 0,  0,  1]])  # Z_l =  Z_e
 
     quat_Lidar2Ego = R.from_matrix(r_Lidar2Ego).as_quat()
 
-    r_Cam2Ego = np.array([  [ 0,  0,  1],   # X_c = -Y_e
+    r_Cam2Ego = np.array([  [ 0,  0,  1],   # X_c = -Y_e   p_e = r @ p_c
                             [-1,  0,  0],   # Y_c = -Z_e
                             [ 0, -1,  0]])  # Z_c =  X_e
     
@@ -408,13 +416,18 @@ def process_rosbag(bag_file, output_dir):
 # ======================================== ego_pose ========================================
         
         # >>> Save sweeps pcd >>>
-        sweep_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
-        sweep_bin_path = os.path.join(sweep_lidar_folder, sweep_bin_file)
-        if save_pcd:    
-            save_point_cloud_to_pcd(point_cloud_data, sweep_bin_path)
+        #! 根据是否为key frame来决定保存路径 使得sweeps与samples互斥，而非sweeps包含samples
+        if not is_key_frame: # 修改
+            sweep_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
+            sweep_bin_path = os.path.join(sweep_lidar_folder, sweep_bin_file)
+            if save_pcd: 
+                save_point_cloud_to_pcd(point_cloud_data, sweep_bin_path)
+        else:
+            sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
+            sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
+            if save_pcd:
+                save_point_cloud_to_pcd(point_cloud_data, sample_bin_path)
         # <<< Save sweeps pcd <<<
-
-# ================================================= LIDAR =================================================
 
 # ====================================== lidar_sample_data ======================================
         
@@ -430,7 +443,7 @@ def process_rosbag(bag_file, output_dir):
                 "height":                  <int> -- If the sample data is an image, this is the image height in pixels.
                 "timestamp":               <int> -- Unix time stamp.
                 "is_key_frame":            <bool> -- True if sample_data is part of key_frame, else False.
-                "next":                    <str> -- Foreign key. Sample data from the same sensor that follows this in time. Empty if end of scene.
+                "next":                    <str> -- Foreign key. Sample data from the same sensor that follows this in time. Empty if end of scene. 同一传感器
                 "prev":                    <str> -- Foreign key. Sample data from the same sensor that precedes this in time. Empty if start of scene.
             }
         '''
@@ -445,21 +458,20 @@ def process_rosbag(bag_file, output_dir):
             'is_key_frame': is_key_frame,
             'height': 0,
             'width': 0,
-            'filename': f"sweeps/LIDAR_TOP/{sweep_bin_file}",
+            'filename': f"sweeps/LIDAR_TOP/{sweep_bin_file}" if not is_key_frame else f"samples/LIDAR_TOP/{sample_bin_file}", #! 根据是否为key frame来决定保存路径
             'prev': '',
             'next': '',
         }
         sample_datas.append(sd_lidar)
         sd_count += 1
 
-# ====================================== lidar_sample_data ======================================
 
 # ======================================== sample ========================================
         if is_key_frame:
-            sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
-            sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
-            if save_pcd:
-                save_point_cloud_to_pcd(point_cloud_data, sample_bin_path)
+            # sample_bin_file = f"pc_{int(pc_timestamp * 1e6)}.pcd.bin"
+            # sample_bin_path = os.path.join(sample_lidar_folder, sample_bin_file)
+            # if save_pcd:
+            #     save_point_cloud_to_pcd(point_cloud_data, sample_bin_path)
 
             '''样本是 2 Hz 的带注释的关键帧。作为单次 LIDAR 扫描的一部分，数据在（大约）相同的时间戳处收集。
                 sample {
@@ -478,39 +490,41 @@ def process_rosbag(bag_file, output_dir):
                 'scene_token': scene_token,
             }
             samples.append(sample)
-# ======================================== sample ========================================
 
 # ======================================== sample_annotation ========================================
 
-            
+            # 障碍物是固定的，小车是移动的，根据障碍物的可见行来判断是否加入样本
+            # 在某个sample帧中，遍历所有固定障碍物
             for obs in obstacle_world_coords_dict:
                 pos_obs = obs['pos']
                 size_obs = obs['size']
-                rot_obs = np.array([1,0,0,0])
+                rot_obs = np.array([1,0,0,0]) # 四元数 [w x y z] 这个假设物体没有旋转
                 
                 box_cam = data_classes.Box(pos_obs, size_obs, Quaternion(rot_obs), name = obs['category'])
-                box_cam.translate(-np.array(ego_pose['translation']))
+                box_cam.translate(-np.array(ego_pose['translation'])) # global2ego
                 box_cam.rotate(Quaternion(ego_pose['rotation']).inverse)
-                box_cam.translate(-np.array(calibrated_sensor_camera['translation']))
+                box_cam.translate(-np.array(calibrated_sensor_camera['translation'])) # ego2cam
                 box_cam.rotate(Quaternion(calibrated_sensor_camera['rotation']).inverse)
 
-                if (geometry_utils.box_in_image(box_cam, K, [rgb_msg.width, rgb_msg.height], 1)):
+                # 判断box是否在图像中
+                if (geometry_utils.box_in_image(box_cam, K, [rgb_msg.width, rgb_msg.height], 1)): # 1 center of box 在图像中 粗筛
                     
                     box_lidar = data_classes.Box(pos_obs, size_obs, Quaternion(rot_obs), name = obs['category'])
-                    box_lidar.translate(-np.array(ego_pose['translation']))
+                    box_lidar.translate(-np.array(ego_pose['translation'])) # global2ego
                     box_lidar.rotate(Quaternion(ego_pose['rotation']).inverse)
-                    box_lidar.translate(-np.array(calibrated_sensor_lidar['translation']))
+                    box_lidar.translate(-np.array(calibrated_sensor_lidar['translation'])) # ego2lidar
                     box_lidar.rotate(Quaternion(calibrated_sensor_lidar['rotation']).inverse)
                     
                     pcd_in_box = geometry_utils.points_in_box(box_lidar, pc_data_nus)
 
-                    if not np.any(pcd_in_box):
+                    if not np.any(pcd_in_box): # 细筛1 
                         continue
                     num_lidar_pts = int(np.sum(pcd_in_box))
                         
-                    visibility = calculate_visibility(box_cam, K, (rgb_msg.height, rgb_msg.width))
-                    if visibility == 5:
-                        vis_out.append(obs)
+                    visibility = calculate_visibility(box_cam, K, (rgb_msg.height, rgb_msg.width)) 
+                    # 虽然bbox_3d中心点在图像内，但是在物体前方的角点(也有可能中心点在图像内,角点全在物体后方?)投影到图像上后的凸包交集可能为0
+                    if visibility == 5:  # 不可见 细筛2  
+                        vis_out.append(obs) 
                         continue        
                     print(f'{pos_obs} can be seem at {odom_pos}\n')
                     print(f"visibility level: v-{visibility}\n")
@@ -565,12 +579,6 @@ def process_rosbag(bag_file, output_dir):
                         sample_annotations[j]['prev'] = sample_annotations[i]['token']
                         break
 
-# ======================================== sample_annotation ========================================
-
-
-# ================================================= LIDAR =================================================
-
-
 # ============================================= instance =============================================
             
             instance_data = {}
@@ -605,21 +613,21 @@ def process_rosbag(bag_file, output_dir):
 
             instance_list = list(instance_data.values())
 
-# ============================================= instance =============================================
-
-
 # ================================================= IMG =================================================
     
     obs_count = 0
     sample_idx_rgb = 0
+    #! 计算sample_datas中雷达数据和相机数据的交界索引 即最后一个雷达数据索引 用以区分雷达数据和相机数据的prev和next 
+    lidar_cam_sd_index = sd_count-1  # 默认sd_count>0
+    
     print("Processing /rgb_data messages...")
-    for rgb_idx, (topic, rgb_msg, t) in enumerate(tqdm(bag.read_messages(topics=['/rgb_data']))):
+    for rgb_idx, (topic, rgb_msg, t) in enumerate(tqdm(bag.read_messages(topics=['/rgb_data']))): # 10Hz
     
         img_timestamp = t.to_sec()
         is_key_frame = False
         
 
-        # 2Hz key frame
+        # 2Hz key frame 0.5s一个key frame
         if rgb_idx == 0:
             is_key_frame = True
 
@@ -629,15 +637,23 @@ def process_rosbag(bag_file, output_dir):
 
         sample_token = f"sample_token_{scene_name}_{sample_idx_rgb:06d}"
 
-        # >>> Save sweeps jpg >>>
-        sweep_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
-        sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
-        if save_img:
-            save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
-        # <<< Save sweeps jpg <<<
+        #! 根据是否为key frame来决定保存路径 使得sweeps与samples互斥，而非sweeps包含samples | 且使用save_image_to_jpg_np()
+        if not is_key_frame:
+            sweep_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
+            sweep_cam_path = os.path.join(sweep_camera_folder, sweep_cam_file)
+            if save_img:
+                # save_image_to_jpg(rgb_msg, sweep_cam_path, bridge)
+                save_image_to_jpg_np(rgb_msg, sweep_cam_path)
+        else:
+            sample_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
+            sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
+            if save_img:
+                # save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+                save_image_to_jpg_np(rgb_msg, sample_cam_path)
 
 # ====================================== sample_data ======================================
 
+        
         sd_token_camera = f"sd_token_{scene_name}_{(sd_count):06d}"
         ego_pose_token = f"ego_token_{scene_name}_{rgb_idx:06d}"
         sd_camera = {
@@ -650,30 +666,29 @@ def process_rosbag(bag_file, output_dir):
             'is_key_frame': is_key_frame,
             'height': rgb_msg.height,
             'width': rgb_msg.width,
-            'filename': f"sweeps/CAM_FRONT/{sweep_cam_file}",
+            'filename': f"sweeps/CAM_FRONT/{sweep_cam_file}" if not is_key_frame else f"samples/CAM_FRONT/{sample_cam_file}", #! 根据是否为key frame来决定保存路径
             'prev': '',
             'next': '',
         }
         sample_datas.append(sd_camera)
         sd_count += 1
 
-# ====================================== sample_data ======================================
-
-        if is_key_frame:
-            sample_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
-            sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
-            if save_img:
-                save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
+        # if is_key_frame:
+        #     sample_cam_file = f"img_{int(img_timestamp * 1e6)}.jpg"
+        #     sample_cam_path = os.path.join(sample_camera_folder, sample_cam_file)
+        #     if save_img:
+        #         save_image_to_jpg(rgb_msg, sample_cam_path, bridge)
             # print(f"Saving key-frame data at {int(img_timestamp * 1e6)}\n")
-
-# ================================================= IMG =================================================
 
 # =============================== prev & next in sample/sample_data ===============================                
     
-    for i in range(len(samples) - 1):
+    for i in range(len(samples) - 1):  # samples 基于pc_scan
         samples[i]["prev"] = samples[i - 1]["token"] if i > 0 else ''
         samples[i]["next"] = samples[i + 1]["token"]    
     samples[len(samples) - 1]["prev"] = samples[len(samples) - 2]["token"]
+
+
+    
     for i in range(len(sample_datas) - 1):
         sample_datas[i]["prev"] = sample_datas[i - 1]["token"] if i > 0 else ''
         sample_datas[i]["next"] = sample_datas[i + 1]["token"]    
